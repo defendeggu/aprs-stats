@@ -9,12 +9,13 @@ import os
 import select
 import socket
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aprslib
 
 from . import __version__, db
 from .aprs import build_filter, matches, parse_path
+from .altitude import clean_callsign
 from .store import ensure_station, insert_position
 
 log = logging.getLogger("collector")
@@ -102,11 +103,12 @@ class Collector:
             if lat is not None and lon is not None and pkt.get("format") not in NO_POSITION_FORMATS:
                 symbol = (pkt.get("symbol_table") or "") + (pkt.get("symbol") or "") or None
                 try:
-                    insert_position(
+                    if insert_position(
                         cur, callsign=src, ts=now, lat=float(lat), lon=float(lon), source="aprs_is",
                         speed=pkt.get("speed"), course=pkt.get("course"), alt=pkt.get("altitude"),
                         comment=pkt.get("comment"), symbol=symbol, packet_id=packet_id,
-                    )
+                    ) and pkt.get("altitude") is not None:
+                        clean_callsign(cur, src, since=now - timedelta(hours=3))
                 except ValueError:
                     pass
         self.packets_total += 1

@@ -1,78 +1,178 @@
 # aprs-stats
 
-Eigene Auswertung von APRS-Positionsdaten: Rufzeichen mit SSID eintragen, die Daten kommen laufend live aus dem APRS-IS-Netz, ältere Daten lassen sich als Export (z. B. von aprs.fi) importieren. Die Weboberfläche zeigt einzelne Geräte (SSIDs) oder alle zusammen auf der Karte, als Heatmap und in Grafiken.
+Version 0.2.0 · [Changelog](CHANGELOG.md) · Lizenz MIT
+
+Selbst gehostete Statistik für APRS-Positionsdaten. Man trägt Rufzeichen mit SSID ein. Neue Daten kommen laufend live aus dem APRS-IS-Netz, ältere lassen sich als Export von aprs.fi importieren. Die Weboberfläche zeigt einzelne Funkgeräte (SSIDs) oder alle zusammen: auf der Karte, als Heatmap, in Grafiken und Tabellen.
+
+## Inhalt
+
+- [Funktionen](#funktionen)
+- [Schnellstart](#schnellstart)
+- [Bedienung](#bedienung)
+- [Konfiguration](#konfiguration)
+- [Wie die Auswertungen rechnen](#wie-die-auswertungen-rechnen)
+- [Aufbau](#aufbau)
+- [Betrieb](#betrieb)
+- [Sicherheit](#sicherheit)
+- [Entwicklung](#entwicklung)
 
 ## Funktionen
 
-- **Stationen:** Rufzeichen mit fester SSID oder mit *alle SSIDs*. Bei *alle SSIDs* erscheint jedes Funkgerät des Rufzeichens automatisch als eigenes Gerät, sobald es sendet. Bezeichnung und Farbe pro Gerät.
-- **Live:** Der Collector bleibt mit APRS-IS verbunden (`rotate.aprs2.net:14580`), filtert auf die eingetragenen Stationen und speichert jedes Paket mit Pfad. Ändern sich die Stationen, verbindet er sich innert 15 s mit dem neuen Filter neu.
-- **Import:** CSV oder JSON, z. B. von [aprs.fi/export](https://aprs.fi/export). Die Spalten werden über ihre Namen erkannt (`time`, `lat`, `lng`, `speed`, `course`, `altitude`, `comment`, `name` …). Zeiten ohne Zeitzone gelten als UTC. Enthält die Datei kein Rufzeichen, gibt man es beim Import an. Doppelte Positionen werden übersprungen, auch zwischen Import und Live-Daten (gleiches Gerät, höchstens 90 s und 50 m auseinander).
-- **Karte:** Spuren, Punkte, Heatmap und letzte Position, wahlweise auf OpenStreetMap, swisstopo-Landeskarte oder swisstopo-Luftbild.
-- **Statistik:** gefahrene Kilometer pro Tag, Woche, Monat oder Jahr (gestapelt nach Gerät), Aktivität nach Wochentag und Uhrzeit, Geschwindigkeit und Höhe über die Zeit.
-- **Fahrten und Orte:** Fahrten (eine Pause von mehr als 20 min beendet eine Fahrt) und Aufenthaltsorte (Standpunkte mit DBSCAN gruppiert).
-- **Pfade:** Digipeater, iGates und Art des Wegs ins Netz (Internet, direkt zum iGate, über Digipeater) sowie die letzten Rohpakete.
-- **Export:** CSV der aktuellen Auswahl.
-
-Alle Ansichten folgen der Auswahl links: Zeitraum und Geräte. Keine Auswahl bedeutet alle Geräte.
-
-## Aufbau
-
-| Dienst | Aufgabe |
+| Bereich | Was es kann |
 |---|---|
-| `db` | PostgreSQL 16 mit PostGIS, nur im internen Netz |
-| `web` | FastAPI: API und Oberfläche (Leaflet, leaflet.heat, Chart.js, lokal ausgeliefert) |
-| `collector` | Python-Prozess mit APRS-IS-Verbindung, parst mit `aprslib` |
+| Stationen | Rufzeichen mit fester SSID oder mit *alle SSIDs*. Bei *alle SSIDs* wird jedes Gerät, das sendet, automatisch als eigenes Gerät angelegt. Bezeichnung und Farbe pro Gerät. |
+| Live | Dauerhafte Verbindung zu APRS-IS, Filter aus den eingetragenen Stationen. Neue Stationen sind innert 15 s aktiv. |
+| Import | CSV oder JSON von [aprs.fi/export](https://aprs.fi/export), mehrere Dateien auf einmal. Doppelte Positionen werden übersprungen, auch zwischen Import und Live-Daten. |
+| Karte | Spuren, Punkte, Heatmap, letzte Position. Karten: OpenStreetMap, swisstopo-Landeskarte, swisstopo-Luftbild. |
+| Statistik | Kilometer pro Tag/Woche/Monat/Jahr (gestapelt nach Gerät), Aktivität nach Wochentag und Uhrzeit, Geschwindigkeit und Höhe über die Zeit. |
+| Fahrten und Orte | Liste der Fahrten mit Distanz, Dauer und Tempo; Aufenthaltsorte mit Stunden und Anzahl Tage. |
+| Pfade | Digipeater, iGates, Weg ins Netz (Internet, direkt zum iGate, über Digipeater), letzte Rohpakete. |
+| Datenqualität | Falsche GPS-Höhen nach dem Einschalten und Ausreisser werden automatisch verworfen. |
+| Export | CSV der aktuellen Auswahl. |
 
-Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate), `positions` (PostGIS-Punkte), `collector_status`, `imports`. Distanzen, Fahrten und Orte werden bei jeder Abfrage aus den Positionen berechnet. Sprünge schneller als 250 km/h gelten als GPS-Fehler, Bewegungen unter 50 m als Zittern im Stand.
+## Schnellstart
 
-## Betrieb
+Voraussetzung: Docker mit Compose.
 
 ```bash
-cp .env.example .env        # Passwort und Login anpassen
+git clone https://github.com/defendeggu/aprs-stats.git
+cd aprs-stats
+cp .env.example .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 docker compose up -d --build
 ```
 
-Oberfläche: <http://localhost:8092> (Port über `APRS_STATS_PORT`). Der Stack liegt im Dockge-Verzeichnis und erscheint dort als `aprs-stats`.
+Danach <http://localhost:8092> öffnen und unter **Stationen & Import** das erste Rufzeichen eintragen.
 
-Einstellungen in `.env`:
+## Bedienung
+
+**Station eintragen:** Rufzeichen eingeben und SSID wählen. Mit *alle SSIDs* erscheint jedes Funkgerät (z. B. -7 Handfunkgerät, -9 Auto) automatisch, sobald es sendet. Ist *live verfolgen* aktiv, nimmt der Collector die Station in seinen Filter auf.
+
+**Export importieren:**
+
+1. Auf [aprs.fi/export](https://aprs.fi/export) einloggen, Rufzeichen mit SSID und Zeitraum wählen, Format CSV.
+2. aprs.fi erlaubt höchstens 30 Tage pro Export und nur wenige Exporte pro Tag. Am besten Monat für Monat exportieren.
+3. In aprs-stats die Datei(en) wählen. Steht das Rufzeichen nicht in der Datei (bei aprs.fi-CSV der Fall), es im Feld darunter angeben, z. B. `HB3XVA-9`.
+
+Erkannte Spalten (Gross-/Kleinschreibung und Einheiten in Klammern egal): `time`/`timestamp`/`date`, `lat`, `lng`/`lon`, `speed`, `course`, `altitude`, `comment`, `name`/`callsign`. Trennzeichen `,` `;` oder Tab, Dezimalkomma geht auch. Zeiten ohne Zeitzone gelten als UTC, Unix-Zeitstempel werden erkannt.
+
+**Auswahl:** Links Zeitraum (24 h bis *Alles* oder eigene Daten) und Geräte wählen. Ein Klick auf das Rufzeichen wählt alle seine SSIDs. Keine Auswahl bedeutet alle Geräte. Alle Ansichten, Kacheln und der CSV-Export folgen dieser Auswahl.
+
+**Fahrten und Orte:** Ein Klick auf eine Fahrt zeigt genau diese Fahrt auf der Karte, ein Klick auf einen Ort zoomt dorthin.
+
+## Konfiguration
+
+Alle Einstellungen stehen in `.env` (Vorlage: [.env.example](.env.example)).
 
 | Variable | Bedeutung | Standard |
 |---|---|---|
+| `POSTGRES_PASSWORD` | Passwort der Datenbank, **Pflicht**, nur Buchstaben und Ziffern | – |
 | `APRS_STATS_PORT` | Port der Oberfläche | `8092` |
-| `POSTGRES_PASSWORD` | Passwort der Datenbank | – |
-| `APRS_IS_LOGIN` | Login bei APRS-IS (leer: erstes eingetragenes Rufzeichen) | – |
-| `APRS_IS_PASSCODE` | Passcode; `-1` genügt zum Mitlesen | `-1` |
-| `APRS_IS_SERVER`, `APRS_IS_PORT` | APRS-IS-Server | `rotate.aprs2.net`, `14580` |
-| `TZ` | Zeitzone für Tage, Wochentage und Uhrzeiten | `Europe/Zurich` |
+| `APRS_IS_LOGIN` | Login bei APRS-IS; leer = zuerst eingetragenes Rufzeichen | – |
+| `APRS_IS_PASSCODE` | APRS-IS-Passcode; `-1` genügt zum Mitlesen | `-1` |
+| `APRS_IS_SERVER` / `APRS_IS_PORT` | APRS-IS-Server | `rotate.aprs2.net` / `14580` |
+| `TZ` | Zeitzone für Tage, Wochentage, Uhrzeiten | `Europe/Zurich` |
 | `TRIP_GAP_MINUTES` | Pause, die eine Fahrt beendet | `20` |
 | `MAX_PLAUSIBLE_KMH` | schnellere Sprünge gelten als GPS-Fehler | `250` |
+| `LOG_LEVEL` | Log-Stufe des Collectors | `INFO` |
 
-Die Oberfläche hat keine Anmeldung. Sie ist für das Heimnetz gedacht und sollte nicht direkt ins Internet gestellt werden.
+aprs-stats sendet nichts ins APRS-Netz. Für das reine Mitlesen braucht es keinen gültigen Passcode.
 
-Sicherung der Datenbank:
+## Wie die Auswertungen rechnen
+
+- **Kilometer:** Summe der Distanzen zwischen aufeinanderfolgenden Positionen desselben Geräts. Nicht gezählt werden Abstände über 20 min (Pause), Sprünge schneller als 250 km/h (GPS-Fehler) und Bewegungen unter 50 m (Zittern im Stand). Sind zwei Geräte gleichzeitig unterwegs (z. B. Auto und Handfunkgerät), zählen beide.
+- **Fahrten:** Eine Pause von mehr als 20 min beendet eine Fahrt. Angezeigt werden Fahrten ab 1 km. Die Fahrt endet mit der letzten Bewegung.
+- **Orte:** Standpunkte (unter 5 km/h) werden mit DBSCAN gruppiert (Radius wählbar, Standard 150 m, mindestens 4 Punkte). Die Aufenthaltsdauer zählt pro Position höchstens 30 min.
+- **Höhe:** Nach dem Einschalten melden viele Tracker zuerst eine zu tiefe Höhe (z. B. 102 m) und laufen dann über einige Minuten zur echten Höhe hoch. Unterwegs gibt es nach einem kurzen Neustart einzelne Ausreisser. Eine Höhe gilt als plausibel, wenn sie höchstens 30 m plus 12 % der horizontalen Distanz von der letzten plausiblen Höhe abweicht (Strassen sind selten steiler). Beginnt eine Fahrt dort, wo die letzte Fahrt endete, dient deren Höhe als Referenz. Sonst ist die Referenz der Punkt mit der Höhe am nächsten beim Median der Fahrt. Verworfene Höhen fehlen in Grafiken und Kacheln, die Rohwerte bleiben in `altitude_raw` erhalten und erscheinen im Kartenpopup und im CSV-Export. Details: [altitude.py](app/aprs_stats/altitude.py).
+- **Pfade:** APRS-IS dedupliziert. Pro Paket sieht man meist nur den ersten Weg ins Netz, nicht alle Digipeater und iGates, die es gehört haben. Der aprs.fi-Export enthält keine Pfade, Pfadauswertungen gibt es deshalb nur für Live-Daten.
+- **Duplikate:** Eine Position gilt als doppelt, wenn dasselbe Gerät zur selben Sekunde schon eine hat oder wenn eine Position aus der anderen Quelle (Import oder live) höchstens 90 s und 50 m entfernt liegt.
+
+## Aufbau
+
+```
+APRS-IS (rotate.aprs2.net:14580)        aprs.fi-Export (CSV/JSON)
+          │ Filter b/RUFZEICHEN*                  │ Upload
+          ▼                                      ▼
+   ┌─────────────┐                      ┌────────────────┐
+   │  collector  │                      │      web       │◄── Browser :8092
+   │ Python,     │                      │ FastAPI, API,  │
+   │ aprslib     │                      │ Oberfläche     │
+   └──────┬──────┘                      └───────┬────────┘
+          │                                     │
+          └──────────────►┌──────────┐◄─────────┘
+                          │    db    │
+                          │ Postgres │
+                          │ PostGIS  │
+                          └──────────┘
+```
+
+| Dienst | Container | Aufgabe |
+|---|---|---|
+| `db` | `aprs-stats-db` | PostgreSQL 16 mit PostGIS, Volume `db-data`, nur im internen Netz |
+| `web` | `aprs-stats-web` | Oberfläche (Leaflet, Leaflet.heat, Chart.js, lokal ausgeliefert) und API |
+| `collector` | `aprs-stats-collector` | APRS-IS-Verbindung, speichert Pakete und Positionen |
+
+Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe), `collector_status`, `imports`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
+
+Code in [app/aprs_stats/](app/aprs_stats/):
+
+| Datei | Inhalt |
+|---|---|
+| `web.py` | API und Auslieferung der Oberfläche |
+| `collector.py` | APRS-IS-Client mit Neuverbindung und Statusmeldung |
+| `importer.py` | Einlesen von CSV/JSON, Spaltenerkennung |
+| `stats.py` | SQL für Kilometer, Fahrten, Orte, Aktivität, Pfade |
+| `altitude.py` | Höhenfilter |
+| `aprs.py` | Rufzeichen, Filter, Pfadzerlegung |
+| `store.py` | Speichern mit Duplikaterkennung |
+| `static/` | Oberfläche (HTML, CSS, JavaScript, Bibliotheken) |
+
+## Betrieb
+
+Der Stack liegt im Dockge-Verzeichnis und lässt sich dort oder mit `docker compose` steuern.
+
+```bash
+docker compose ps                     # Zustand
+docker compose logs -f collector      # empfangene Pakete live
+docker compose up -d --build          # nach einem Update neu bauen
+```
+
+**Sicherung:**
 
 ```bash
 docker compose exec -T db pg_dump -U aprs aprs | gzip > aprs-stats-$(date +%F).sql.gz
 ```
 
-## Hinweise zu den Daten
+**Wiederherstellung** (in eine leere Datenbank):
 
-- APRS-IS dedupliziert: Pro Paket sieht man meist nur den ersten Weg ins Netz, nicht alle Digipeater und iGates, die es gehört haben.
-- Der aprs.fi-Export enthält keine Pfade. Digipeater- und iGate-Auswertungen gibt es deshalb nur für Live-Daten.
-- aprs.fi exportiert höchstens 30 Tage pro Abfrage und begrenzt die Anzahl Exporte. Am besten Monat für Monat exportieren und die Dateien gesammelt importieren (mehrere Dateien auf einmal sind möglich).
+```bash
+gunzip -c aprs-stats-JJJJ-MM-TT.sql.gz | docker compose exec -T db psql -U aprs aprs
+```
+
+Sicherungen und Exporte gehören nicht ins Repository; die `.gitignore` schliesst sie aus.
+
+## Sicherheit
+
+- Passwörter und der APRS-IS-Passcode stehen nur in `.env`. Diese Datei ist in `.gitignore` und wird nie committet. `docker-compose.yml` enthält keine Standardpasswörter: Ohne `POSTGRES_PASSWORD` startet der Stack nicht.
+- Die Datenbank ist nur im internen Docker-Netz erreichbar, nicht vom Host.
+- Die Container laufen schreibgeschützt, ohne Linux-Capabilities und ohne Rechteausweitung; die Web-App als eigener Benutzer.
+- Die Oberfläche hat **keine Anmeldung**. Sie ist für das Heimnetz gedacht und darf nicht direkt ins Internet. Für den Zugriff von aussen einen Reverse-Proxy mit Anmeldung oder ein VPN davorschalten.
+- Positionsdaten sind persönliche Daten. Exporte und Sicherungen entsprechend aufbewahren.
 
 ## Entwicklung
 
-Tests (laufen im Image):
+Tests laufen im Image:
 
 ```bash
-docker compose build web
+docker build -t aprs-stats:latest app
 docker run --rm -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
   sh -c "pip install -q pytest && python -m pytest -q -p no:cacheprovider /tests"
 ```
 
-API-Dokumentation: <http://localhost:8092/docs>
+API-Dokumentation (OpenAPI): <http://localhost:8092/docs>
+
+Versionierung nach [Semantic Versioning](https://semver.org/lang/de/). Die Version steht in [app/aprs_stats/\_\_init\_\_.py](app/aprs_stats/__init__.py), Änderungen im [CHANGELOG](CHANGELOG.md), Releases als Git-Tags `vX.Y.Z`.
 
 ## Lizenz
 
-MIT, siehe [LICENSE](LICENSE). Mitgelieferte Bibliotheken: Leaflet (BSD-2), Leaflet.heat (BSD-2), Chart.js (MIT).
+MIT, siehe [LICENSE](LICENSE). Mitgelieferte Bibliotheken: Leaflet 1.9.4 (BSD-2), Leaflet.heat 0.2.0 (BSD-2), Chart.js 4.4.1 (MIT).

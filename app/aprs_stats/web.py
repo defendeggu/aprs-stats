@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__, db, stats
+from .altitude import clean_all, clean_callsign
 from .aprs import full_call, normalize_callsign, normalize_ssid
 from .importer import parse_file
 from .store import ensure_station, insert_position
@@ -24,6 +25,8 @@ MAX_UPLOAD = 50 * 1024 * 1024
 @asynccontextmanager
 async def lifespan(_app):
     db.init_schema()
+    with db.conn() as c:
+        clean_all(c.cursor())
     yield
 
 
@@ -148,7 +151,7 @@ def delete_station(sid: int, purge: bool = False):
 @app.get("/api/positions")
 def positions(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
               limit: int = Query(30000, le=200000)):
-    """Positionen als kompakte Liste [callsign, ts(ms), lat, lon, speed, alt, course, comment].
+    """Positionen als Liste [callsign, ts(ms), lat, lon, speed, alt, course, comment, source, alt_raw].
     Bei mehr als `limit` Punkten wird gleichmässig ausgedünnt."""
     f = make_filter(calls, start, end)
     where, params = f.where()
@@ -157,7 +160,7 @@ def positions(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
         step = max(1, math.ceil(n / limit))
         rows = c.execute(
             f"""SELECT callsign, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, lat, lon,
-                       speed_kmh, altitude_m, course, comment, source
+                       speed_kmh, altitude_m, course, comment, source, altitude_raw
                 FROM (SELECT *, row_number() OVER (ORDER BY ts) AS rn FROM positions WHERE {where}) x
                 WHERE rn %% %(step)s = 0 OR rn = 1 ORDER BY callsign, ts""",
             {**params, "step": step},
@@ -165,7 +168,7 @@ def positions(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
     return {
         "total": n, "step": step,
         "rows": [[r["callsign"], r["t"], r["lat"], r["lon"], r["speed_kmh"], r["altitude_m"],
-                  r["course"], r["comment"], r["source"]] for r in rows],
+                  r["course"], r["comment"], r["source"], r["altitude_raw"]] for r in rows],
     }
 
 
@@ -176,7 +179,7 @@ def latest(calls: CallsQ = None):
     with db.conn() as c:
         return c.execute(
             f"""SELECT DISTINCT ON (callsign) callsign, ts, lat, lon, speed_kmh, course, altitude_m,
-                       comment, symbol, source
+                       altitude_raw, comment, symbol, source
                 FROM positions WHERE {where} ORDER BY callsign, ts DESC""",
             params,
         ).fetchall()
@@ -247,6 +250,8 @@ def status():
             """SELECT (SELECT count(*) FROM positions) AS positions,
                       (SELECT count(*) FROM packets) AS packets,
                       (SELECT count(*) FROM stations) AS stations,
+                      (SELECT count(*) FROM positions
+                        WHERE altitude_raw IS NOT NULL AND altitude_m IS NULL) AS altitude_filtered,
                       pg_size_pretty(pg_database_size(current_database())) AS db_size"""
         ).fetchone()
         imports = c.execute("SELECT * FROM imports ORDER BY imported_at DESC LIMIT 20").fetchall()
@@ -278,6 +283,8 @@ async def import_file(file: UploadFile = File(...), callsign: str = Form("")):
                     duplicate += 1
             except ValueError as e:
                 errors.append(f"{r['ts']:%Y-%m-%d %H:%M:%S}: {e}")
+        for call in {r["callsign"] for r in rows}:
+            clean_callsign(cur, call)
         cur.execute(
             """INSERT INTO imports (filename, callsign, rows_total, rows_imported, rows_duplicate, rows_error)
                VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -302,18 +309,18 @@ def export_csv(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["callsign", "time_utc", "lat", "lng", "speed_kmh", "course", "altitude_m",
-                    "comment", "source"])
+                    "altitude_raw", "comment", "source"])
         with db.conn() as c:
             cur = c.cursor(name="export")
             cur.execute(
                 f"""SELECT callsign, to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS t, lat, lon,
-                           speed_kmh, course, altitude_m, comment, source
+                           speed_kmh, course, altitude_m, altitude_raw, comment, source
                     FROM positions WHERE {where} ORDER BY ts""",
                 params,
             )
             for r in cur:
                 w.writerow([r["callsign"], r["t"], r["lat"], r["lon"], r["speed_kmh"], r["course"],
-                            r["altitude_m"], r["comment"], r["source"]])
+                            r["altitude_m"], r["altitude_raw"], r["comment"], r["source"]])
                 if buf.tell() > 65536:
                     yield buf.getvalue()
                     buf.seek(0)

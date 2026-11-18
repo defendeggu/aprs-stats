@@ -13,7 +13,7 @@ x-app: &app
     - path: .env
       required: false
   environment:
-    DATABASE_URL: postgresql://aprs:${POSTGRES_PASSWORD:-aprs}@db:5432/aprs
+    DATABASE_URL: postgresql://aprs:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD in .env setzen}@db:5432/aprs
     TZ: ${TZ:-Europe/Zurich}
   depends_on:
     db:
@@ -34,7 +34,7 @@ services:
     environment:
       POSTGRES_DB: aprs
       POSTGRES_USER: aprs
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aprs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD in .env setzen}
       TZ: ${TZ:-Europe/Zurich}
     volumes:
       - db-data:/var/lib/postgresql/data

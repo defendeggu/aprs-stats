@@ -1,4 +1,17 @@
+# Konfiguration mit Passwörtern – nie committen
 .env
+.env.*
+!.env.example
+
+# Datenbank-Sicherungen und Exporte (enthalten Positionsdaten)
+/*.sql
+*.sql.gz
+*.dump
+backups/
+exports/
+aprsfi_export_*
+
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/

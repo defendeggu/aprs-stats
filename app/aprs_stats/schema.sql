@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS positions (
     UNIQUE (callsign, ts)
 );
 CREATE INDEX IF NOT EXISTS positions_ts ON positions (ts);
+CREATE INDEX IF NOT EXISTS positions_call_ts ON positions (callsign, ts);
+
+-- ab 0.2.0: GPS-Rohhöhe separat, altitude_m ist bereinigt (siehe altitude.py)
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS altitude_raw real;
+UPDATE positions SET altitude_raw = altitude_m WHERE altitude_raw IS NULL AND altitude_m IS NOT NULL;
 CREATE INDEX IF NOT EXISTS positions_geom ON positions USING gist (geom);
 
 -- Zustand des Collectors (eine Zeile)

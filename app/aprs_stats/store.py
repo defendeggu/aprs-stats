@@ -12,10 +12,10 @@ DEDUP_METERS = 50
 
 _INSERT_POSITION = """
 INSERT INTO positions (packet_id, callsign, ts, lat, lon, geom, speed_kmh, course,
-                       altitude_m, comment, symbol, source)
+                       altitude_m, altitude_raw, comment, symbol, source)
 SELECT %(packet_id)s, %(callsign)s, %(ts)s, %(lat)s, %(lon)s,
        ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326),
-       %(speed)s, %(course)s, %(alt)s, %(comment)s, %(symbol)s, %(source)s
+       %(speed)s, %(course)s, %(alt)s, %(alt)s, %(comment)s, %(symbol)s, %(source)s
 WHERE NOT EXISTS (
     SELECT 1 FROM positions p
     WHERE p.callsign = %(callsign)s

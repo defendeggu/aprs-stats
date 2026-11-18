@@ -215,12 +215,13 @@ for (const [k, sel] of Object.entries(layerBoxes)) {
 }
 
 function popupFor(r) {
-  const [call, t, lat, lon, spd, alt, crs, comment, src] = r;
+  const [call, t, lat, lon, spd, alt, crs, comment, src, altRaw] = r;
   return `<b>${esc(labelOf(call))}</b><br>${dt(t)}<br>
     ${lat.toFixed(5)}, ${lon.toFixed(5)}<br>
     ${spd != null ? `Geschwindigkeit: ${fmtNum.format(spd)} km/h<br>` : ""}
     ${crs != null ? `Kurs: ${Math.round(crs)}°<br>` : ""}
-    ${alt != null ? `Höhe: ${fmtInt.format(Math.round(alt))} m<br>` : ""}
+    ${alt != null ? `Höhe: ${fmtInt.format(Math.round(alt))} m<br>`
+      : altRaw != null ? `Höhe: – <span class="muted">(GPS meldete ${fmtInt.format(Math.round(altRaw))} m, verworfen)</span><br>` : ""}
     ${comment ? `<i>${esc(comment)}</i><br>` : ""}
     <span class="muted">Quelle: ${src === "import" ? "Import" : "APRS-IS"}</span>`;
 }
@@ -266,7 +267,7 @@ async function loadLatest() {
   for (const p of latest) {
     L.circleMarker([p.lat, p.lon], { radius: 8, color: "#fff", weight: 2, fillColor: colorOf(p.callsign), fillOpacity: 1, renderer })
       .bindTooltip(`${esc(p.callsign)} · ${ago(p.ts)}`, { permanent: true, direction: "right", offset: [8, 0], className: "call-label" })
-      .bindPopup(popupFor([p.callsign, p.ts, p.lat, p.lon, p.speed_kmh, p.altitude_m, p.course, p.comment, p.source]))
+      .bindPopup(popupFor([p.callsign, p.ts, p.lat, p.lon, p.speed_kmh, p.altitude_m, p.course, p.comment, p.source, p.altitude_raw]))
       .addTo(layers.latest);
   }
 }
@@ -554,6 +555,7 @@ async function loadStatus() {
     <dt>Positionen</dt><dd>${fmtInt.format(s.counts.positions)}</dd>
     <dt>Pakete</dt><dd>${fmtInt.format(s.counts.packets)}</dd>
     <dt>Stationen</dt><dd>${fmtInt.format(s.counts.stations)}</dd>
+    <dt>Höhen verworfen</dt><dd>${fmtInt.format(s.counts.altitude_filtered)} <span class="muted small">(GPS-Kaltstart und Ausreisser)</span></dd>
     <dt>Grösse</dt><dd>${esc(s.counts.db_size)}</dd>
     <dt>Version</dt><dd>${esc(s.version)}</dd>`;
   $("#imports-table").innerHTML = s.imports.length
