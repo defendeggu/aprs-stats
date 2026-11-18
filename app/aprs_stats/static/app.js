@@ -101,7 +101,7 @@ function renderDevices() {
       ${ds.map(d => `<label class="dev" title="${esc(d.full)}">
         <input type="checkbox" data-call="${esc(d.full)}" ${state.selected.has(d.full) ? "checked" : ""}>
         <span class="dot" style="background:${colorOf(d.full)}"></span>
-        <span>${esc(d.ssid ? "-" + d.ssid : "(ohne)")}</span>
+        <span title="${esc(ssidTitle(d.ssid))}">${esc(ssidLabel(d.ssid))}</span>
         <span class="lbl">${esc(d.label || "")}</span>
         <span class="cnt" title="Positionen">${fmtInt.format(d.points || 0)}</span>
       </label>`).join("")}
@@ -440,11 +440,27 @@ async function loadPaths() {
     : `<tbody><tr><td class="muted">Noch keine Live-Pakete im gewählten Zeitraum.</td></tr></tbody>`;
 }
 
+/* ---------- SSIDs (Empfehlungen nach https://www.aprs.org/aprs11/SSIDs.txt) ---------- */
+const SSID_INFO = {
+  0: "Primärstation, meist fest", 1: "Zusatzstation (Digi, Mobil, WX)", 2: "Zusatzstation (Digi, Mobil, WX)",
+  3: "Zusatzstation (Digi, Mobil, WX)", 4: "Zusatzstation (Digi, Mobil, WX)",
+  5: "Andere Netze (Smartphone, D-Star)", 6: "Sonderbetrieb (Satellit, Camping, 6 m)", 7: "Handfunkgerät",
+  8: "Boot, Wohnmobil, 2. Mobil", 9: "Mobil (Hauptfahrzeug)", 10: "Internet, iGate, EchoLink, Winlink",
+  11: "Ballon, Flugzeug, Raumfahrt", 12: "APRStt, DTMF, Einweg-Tracker", 13: "Wetterstation",
+  14: "Berufsfahrer", 15: "Zusatzstation (Digi, Mobil, WX)",
+};
+/* SSID für die Anzeige: "" und "0" sind dieselbe Station (-0 wird ohne SSID angezeigt) */
+function ssidLabel(ssid) { return "-" + (ssid || "0"); }
+function ssidTitle(ssid) { const i = SSID_INFO[ssid || "0"]; return i ? `${ssidLabel(ssid)}: ${i}` : ssidLabel(ssid); }
+function fillSsidSelect(sel) {
+  for (let i = 0; i <= 15; i++) {
+    const extra = i === 0 ? " (ohne SSID angezeigt)" : "";
+    sel.insertAdjacentHTML("beforeend", `<option value="${i}">-${i} · ${SSID_INFO[i]}${extra}</option>`);
+  }
+}
+
 /* ---------- Stationen ---------- */
-(function fillSsid() {
-  const sel = $("#station-form select[name=ssid]");
-  for (let i = 1; i <= 15; i++) sel.insertAdjacentHTML("beforeend", `<option value="${i}">-${i}</option>`);
-})();
+fillSsidSelect($("#station-form select[name=ssid]"));
 
 async function loadStations() {
   state.stations = await api("stations");
@@ -459,7 +475,7 @@ function renderStationsTable() {
   $("#stations-table").innerHTML = rows.length
     ? `<thead><tr><th>Station</th><th>Bezeichnung</th><th>Farbe</th><th>live</th><th class="num">Positionen</th><th>letzte Position</th><th></th></tr></thead><tbody>` +
       rows.map(s => `<tr data-id="${s.id}">
-        <td><b>${esc(s.full)}</b>${s.ssid === "*" ? ` <span class="muted small">alle SSIDs</span>` : ""}${s.auto ? ` <span class="muted small">automatisch</span>` : ""}</td>
+        <td><b>${esc(s.full)}</b>${s.ssid === "" ? ` <span class="muted small">(-0)</span>` : ""}${s.ssid === "*" ? ` <span class="muted small">alle SSIDs</span>` : ""}${s.auto ? ` <span class="muted small">automatisch</span>` : ""}</td>
         <td><input type="text" data-f="label" value="${esc(s.label || "")}" placeholder="–"></td>
         <td>${s.ssid === "*" ? "" : `<input type="color" data-f="color" value="${s.color || colorOf(s.full)}">`}</td>
         <td><input type="checkbox" data-f="track" ${s.track ? "checked" : ""} title="live über APRS-IS verfolgen"></td>
@@ -659,10 +675,7 @@ $("#sym-grid").addEventListener("click", e => {
 /* ---------- Baken ---------- */
 const beaconForm = $("#beacon-form");
 let beaconMap = null, beaconMarker = null, beaconConfig = null, beacons = [];
-(function fillBeaconSsid() {
-  const sel = beaconForm.ssid;
-  for (let i = 1; i <= 15; i++) sel.insertAdjacentHTML("beforeend", `<option value="${i}">-${i}</option>`);
-})();
+fillSsidSelect(beaconForm.ssid);
 
 function setSymbol(table, code) {
   beaconForm.symbol_table.value = table;
@@ -743,7 +756,7 @@ $("#beacon-cancel").onclick = () => { resetBeaconForm(); $("#beacon-msg").textCo
 
 function editBeacon(b) {
   const f = beaconForm;
-  f.id.value = b.id; f.callsign.value = b.callsign; f.ssid.value = b.ssid;
+  f.id.value = b.id; f.callsign.value = b.callsign; f.ssid.value = b.ssid || "0";
   f.lat.value = b.lat.toFixed(5); f.lon.value = b.lon.toFixed(5);
   f.altitude_m.value = b.altitude_m ?? ""; f.ambiguity.value = b.ambiguity;
   f.comment.value = b.comment || ""; f.interval_min.value = b.interval_min; f.enabled.checked = b.enabled;
@@ -811,7 +824,7 @@ async function loadBeacons() {
     <div class="beacon" data-id="${b.id}">
       <span>${symbolHtml(b.symbol_table, b.symbol_code, true)}</span>
       <div>
-        <div><b>${esc(b.full)}</b> <span class="badge ${b.enabled ? "on" : "off"}">${b.enabled ? "aktiv" : "pausiert"}</span>
+        <div><b>${esc(b.full)}</b>${b.ssid === "" ? ` <span class="muted small">(-0)</span>` : ""} <span class="badge ${b.enabled ? "on" : "off"}">${b.enabled ? "aktiv" : "pausiert"}</span>
           <span class="muted small">${esc(symbolDesc(b.symbol_table, b.symbol_code))}</span></div>
         <div class="meta">${b.lat.toFixed(5)}, ${b.lon.toFixed(5)}${b.altitude_m != null ? ` · ${fmtInt.format(b.altitude_m)} m` : ""}
           · alle ${b.interval_min} min${b.ambiguity ? ` · unscharf (Stufe ${b.ambiguity})` : ""}</div>

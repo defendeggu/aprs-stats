@@ -101,3 +101,13 @@ def test_position_packet():
         position_packet("HB3XVA", 47.1, 8.2, "x", "-")
     with pytest.raises(ValueError):
         position_packet("HB3XVA", 47.1, 8.2, "/", "-", "x" * 44)
+
+
+def test_ssid_zero_is_primary_station():
+    """-0 ist die Primärstation und wird ohne SSID angezeigt/gesendet (aprs.org/aprs11/SSIDs.txt)."""
+    from aprs_stats.aprs import full_call, normalize_ssid, position_packet
+    assert normalize_ssid("0") == "" and normalize_ssid("-0") == "" and normalize_ssid("") == ""
+    assert normalize_callsign("HB3XVA-0") == normalize_callsign("HB3XVA") == ("HB3XVA", "")
+    assert full_call("HB3XVA", normalize_ssid("0")) == "HB3XVA"
+    assert position_packet(full_call("HB3XVA", ""), 47.1, 8.2, "/", "-").startswith("HB3XVA>APZSTA,")
+    assert normalize_ssid("15") == "15" and normalize_ssid("tt") == "TT"

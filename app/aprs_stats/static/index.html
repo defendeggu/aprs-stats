@@ -126,7 +126,6 @@
             <label>SSID
               <select name="ssid">
                 <option value="*">alle SSIDs (automatisch erkennen)</option>
-                <option value="">keine SSID</option>
               </select>
             </label>
             <label>Bezeichnung <input name="label" placeholder="z. B. Auto, Handfunkgerät"></label>
@@ -135,7 +134,9 @@
             <button class="btn primary" type="submit">Eintragen</button>
             <p class="msg" id="station-msg"></p>
           </form>
-          <p class="muted small">Mit <b>alle SSIDs</b> erscheint jedes Funkgerät des Rufzeichens (z. B. -7, -9) automatisch als eigenes Gerät, sobald es sendet.</p>
+          <p class="muted small">Mit <b>alle SSIDs</b> erscheint jedes Funkgerät des Rufzeichens (z. B. -7, -9) automatisch als eigenes Gerät, sobald es sendet.
+            Die SSID -0 ist die Primärstation und wird ohne SSID angezeigt (HB9ABC = HB9ABC-0).
+            Bedeutung der SSIDs nach <a href="https://www.aprs.org/aprs11/SSIDs.txt" target="_blank" rel="noopener">aprs.org</a>.</p>
         </div>
         <div class="card">
           <h2>Export importieren</h2>
@@ -164,7 +165,7 @@
             <div class="row2">
               <label>Rufzeichen <input name="callsign" required pattern="[A-Za-z0-9]{1,9}"></label>
               <label>SSID
-                <select name="ssid"><option value="">keine</option></select>
+                <select name="ssid"></select>
               </label>
             </div>
             <div class="symbol-field">

@@ -3,6 +3,16 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.3.1] – 2026-11-18
+
+### Geändert
+- SSID **-0** ist in allen Auswahlfeldern (Station eintragen, Bake) wählbar. Sie bezeichnet nach
+  [aprs.org/aprs11/SSIDs.txt](https://www.aprs.org/aprs11/SSIDs.txt) die Primärstation und wird wie
+  dort festgelegt ohne SSID angezeigt und gesendet (`HB9ABC` = `HB9ABC-0`). Die Auswahl „keine SSID“
+  entfällt, weil sie dasselbe bedeutet.
+- SSID-Auswahl zeigt die empfohlene Bedeutung (z. B. „-9 · Mobil (Hauptfahrzeug)“, „-7 · Handfunkgerät“).
+- Geräteliste und Tabellen zeigen „-0“ statt „(ohne)“; Tooltip mit der Bedeutung der SSID.
+
 ## [0.3.0] – 2026-11-18
 
 ### Neu
@@ -46,6 +56,7 @@ MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehl
 - Karte (Spuren, Punkte, Heatmap, letzte Position), Kilometer, Aktivität, Geschwindigkeit/Höhe,
   Fahrten, Orte, Digipeater/iGates, CSV-Export.
 
+[0.3.1]: https://github.com/defendeggu/aprs-stats/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/defendeggu/aprs-stats/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/defendeggu/aprs-stats/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/defendeggu/aprs-stats/releases/tag/v0.1.0

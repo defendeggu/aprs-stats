@@ -1,6 +1,6 @@
 # aprs-stats
 
-Version 0.3.0 · [Changelog](CHANGELOG.md) · Lizenz MIT
+Version 0.3.1 · [Changelog](CHANGELOG.md) · Lizenz MIT
 
 Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (Bake) für aprs.fi. Man trägt Rufzeichen mit SSID ein. Neue Daten kommen laufend live aus dem APRS-IS-Netz, ältere lassen sich als Export von aprs.fi importieren. Die Weboberfläche zeigt einzelne Funkgeräte (SSIDs) oder alle zusammen: auf der Karte, als Heatmap, in Grafiken und Tabellen.
 
@@ -47,7 +47,7 @@ Danach <http://localhost:8092> öffnen und unter **Stationen & Import** das erst
 
 ## Bedienung
 
-**Station eintragen:** Rufzeichen eingeben und SSID wählen. Mit *alle SSIDs* erscheint jedes Funkgerät (z. B. -7 Handfunkgerät, -9 Auto) automatisch, sobald es sendet. Ist *live verfolgen* aktiv, nimmt der Collector die Station in seinen Filter auf.
+**Station eintragen:** Rufzeichen eingeben und SSID wählen. Die Auswahl zeigt die empfohlene Bedeutung jeder SSID nach [aprs.org/aprs11/SSIDs.txt](https://www.aprs.org/aprs11/SSIDs.txt), z. B. -0 Primärstation, -7 Handfunkgerät, -9 Mobil, -10 Internet/iGate, -13 Wetterstation. -0 wird wie dort festgelegt ohne SSID angezeigt und gesendet: `HB9ABC` und `HB9ABC-0` sind dieselbe Station. Alphanumerische SSIDs mit 1–2 Zeichen (z. B. `-TT`) lassen sich direkt im Rufzeichenfeld eintragen. Mit *alle SSIDs* erscheint jedes Funkgerät (z. B. -7 Handfunkgerät, -9 Auto) automatisch, sobald es sendet. Ist *live verfolgen* aktiv, nimmt der Collector die Station in seinen Filter auf.
 
 **Export importieren:**
 
