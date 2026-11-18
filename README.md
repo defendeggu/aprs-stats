@@ -1,6 +1,8 @@
 # aprs-stats
 
-Version 0.3.1 · [Changelog](CHANGELOG.md) · Lizenz MIT
+Author: Adrian S / HB3XVA & Anthropic Claude - v0.3.2
+
+[Changelog](CHANGELOG.md) · Lizenz MIT
 
 Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (Bake) für aprs.fi. Man trägt Rufzeichen mit SSID ein. Neue Daten kommen laufend live aus dem APRS-IS-Netz, ältere lassen sich als Export von aprs.fi importieren. Die Weboberfläche zeigt einzelne Funkgeräte (SSIDs) oder alle zusammen: auf der Karte, als Heatmap, in Grafiken und Tabellen.
 
@@ -182,7 +184,7 @@ docker run --rm -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
 
 API-Dokumentation (OpenAPI): <http://localhost:8092/docs>
 
-Versionierung nach [Semantic Versioning](https://semver.org/lang/de/). Die Version steht in [app/aprs_stats/\_\_init\_\_.py](app/aprs_stats/__init__.py), Änderungen im [CHANGELOG](CHANGELOG.md), Releases als Git-Tags `vX.Y.Z`.
+Versionierung nach [Semantic Versioning](https://semver.org/lang/de/). Die Version steht in [app/aprs_stats/\_\_init\_\_.py](app/aprs_stats/__init__.py) (die Webseite zeigt sie in der Fusszeile, die API unter `/api/version`). Bei einer neuen Version auch die Author-Zeile oben in diesem README anpassen. Änderungen im [CHANGELOG](CHANGELOG.md), Releases als Git-Tags `vX.Y.Z`.
 
 ## Lizenz
 

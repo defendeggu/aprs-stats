@@ -893,6 +893,10 @@ setInterval(async () => {
 }, 30000);
 
 (async function init() {
+  api("version").then(v => {
+    $("#credit").textContent = v.credit;
+    document.title = `APRS-Stats v${v.version}`;
+  }).catch(() => {});
   try { SYMBOLS = (await (await fetch("vendor/aprs-symbols/symbols.json")).json()).symbols; } catch { SYMBOLS = {}; }
   setSymbol("/", "-");
   $$("#ranges button").forEach(x => x.classList.toggle("active", x.dataset.range === state.range));

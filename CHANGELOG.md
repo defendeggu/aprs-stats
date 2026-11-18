@@ -3,6 +3,13 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.3.2] – 2026-11-19
+
+### Neu
+- Author und Version auf der Webseite (Fusszeile und Seitentitel) und im README:
+  „Author: Adrian S / HB3XVA & Anthropic Claude - vX.Y.Z“.
+- API-Endpunkt `/api/version`.
+
 ## [0.3.1] – 2026-11-18
 
 ### Geändert
@@ -56,6 +63,7 @@ MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehl
 - Karte (Spuren, Punkte, Heatmap, letzte Position), Kilometer, Aktivität, Geschwindigkeit/Höhe,
   Fahrten, Orte, Digipeater/iGates, CSV-Export.
 
+[0.3.2]: https://github.com/defendeggu/aprs-stats/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/defendeggu/aprs-stats/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/defendeggu/aprs-stats/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/defendeggu/aprs-stats/compare/v0.1.0...v0.2.0

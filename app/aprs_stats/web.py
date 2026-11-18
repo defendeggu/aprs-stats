@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, db, stats
+from . import AUTHOR, __version__, db, stats
 from .altitude import clean_all, clean_callsign
 from .aprs import MAX_COMMENT_BYTES, full_call, normalize_callsign, normalize_ssid, position_packet, split_full
 from .importer import parse_file
@@ -489,6 +489,11 @@ def delete_beacon(bid: int):
 
 
 # --- Oberfläche -------------------------------------------------------------
+
+@app.get("/api/version")
+def version():
+    return {"version": __version__, "author": AUTHOR, "credit": f"Author: {AUTHOR} - v{__version__}"}
+
 
 @app.get("/healthz")
 def healthz():
