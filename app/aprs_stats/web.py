@@ -1,0 +1,341 @@
+"""Weboberfläche und API."""
+import csv
+import io
+import math
+from contextlib import asynccontextmanager
+from datetime import datetime
+from importlib.resources import files
+from typing import Annotated
+
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import __version__, db, stats
+from .aprs import full_call, normalize_callsign, normalize_ssid
+from .importer import parse_file
+from .store import ensure_station, insert_position
+
+STATIC = files("aprs_stats").joinpath("static")
+MAX_UPLOAD = 50 * 1024 * 1024
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    db.init_schema()
+    yield
+
+
+app = FastAPI(title="aprs-stats", version=__version__, lifespan=lifespan)
+
+
+# --- Hilfen -----------------------------------------------------------------
+
+def make_filter(calls: str | None, start: datetime | None, end: datetime | None) -> stats.Filter:
+    lst = [c.strip().upper() for c in (calls or "").split(",") if c.strip()]
+    return stats.Filter(calls=lst, start=start, end=end)
+
+
+CallsQ = Annotated[str | None, Query(description="Rufzeichen mit SSID, kommagetrennt; leer = alle")]
+StartQ = Annotated[datetime | None, Query(alias="from")]
+EndQ = Annotated[datetime | None, Query(alias="to")]
+
+
+# --- Stationen --------------------------------------------------------------
+
+class StationIn(BaseModel):
+    callsign: str = Field(..., examples=["HB3XVA"])
+    ssid: str = Field("", examples=["9", "*", ""])
+    label: str | None = None
+    color: str | None = None
+    track: bool = True
+
+
+class StationPatch(BaseModel):
+    label: str | None = None
+    color: str | None = None
+    track: bool | None = None
+
+
+def _station_row(r: dict) -> dict:
+    r = dict(r)
+    r["full"] = f"{r['callsign']}-*" if r["ssid"] == "*" else full_call(r["callsign"], r["ssid"])
+    return r
+
+
+@app.get("/api/stations")
+def list_stations():
+    with db.conn() as c:
+        rows = c.execute(
+            """
+            SELECT s.*, x.points, x.first, x.last, l.lat AS last_lat, l.lon AS last_lon,
+                   l.speed_kmh AS last_speed, l.comment AS last_comment
+            FROM stations s
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS points, min(ts) AS first, max(ts) AS last
+                FROM positions p
+                WHERE p.callsign = CASE WHEN s.ssid = '' THEN s.callsign ELSE s.callsign || '-' || s.ssid END
+            ) x ON s.ssid <> '*'
+            LEFT JOIN LATERAL (
+                SELECT lat, lon, speed_kmh, comment FROM positions p
+                WHERE p.callsign = CASE WHEN s.ssid = '' THEN s.callsign ELSE s.callsign || '-' || s.ssid END
+                ORDER BY ts DESC LIMIT 1
+            ) l ON s.ssid <> '*'
+            ORDER BY s.callsign, s.ssid = '*' DESC, s.ssid
+            """
+        ).fetchall()
+    return [_station_row(r) for r in rows]
+
+
+@app.post("/api/stations", status_code=201)
+def add_station(s: StationIn):
+    try:
+        base, ssid_from_call = normalize_callsign(s.callsign)
+        ssid = normalize_ssid(s.ssid) if s.ssid.strip() else ssid_from_call
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    with db.conn() as c:
+        row = c.execute(
+            """INSERT INTO stations (callsign, ssid, label, color, track, auto)
+               VALUES (%s, %s, %s, %s, %s, false)
+               ON CONFLICT (callsign, ssid) DO UPDATE
+                 SET label = coalesce(EXCLUDED.label, stations.label),
+                     color = coalesce(EXCLUDED.color, stations.color),
+                     track = EXCLUDED.track, auto = false
+               RETURNING *""",
+            (base, ssid, (s.label or "").strip() or None, s.color, s.track),
+        ).fetchone()
+    return _station_row(row)
+
+
+@app.patch("/api/stations/{sid}")
+def patch_station(sid: int, p: StationPatch):
+    sets, params = [], []
+    for k in ("label", "color", "track"):
+        v = getattr(p, k)
+        if v is not None:
+            sets.append(f"{k} = %s")
+            params.append(v.strip() or None if isinstance(v, str) else v)
+    if not sets:
+        raise HTTPException(422, "Nichts zu ändern")
+    with db.conn() as c:
+        row = c.execute(
+            f"UPDATE stations SET {', '.join(sets)} WHERE id = %s RETURNING *", (*params, sid)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Station nicht gefunden")
+    return _station_row(row)
+
+
+@app.delete("/api/stations/{sid}")
+def delete_station(sid: int, purge: bool = False):
+    """Station entfernen. Mit purge=true werden auch ihre Positionen und Pakete gelöscht."""
+    with db.conn() as c:
+        row = c.execute("DELETE FROM stations WHERE id = %s RETURNING *", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Station nicht gefunden")
+        deleted = 0
+        if purge and row["ssid"] != "*":
+            full = full_call(row["callsign"], row["ssid"])
+            deleted = c.execute("DELETE FROM positions WHERE callsign = %s", (full,)).rowcount
+            c.execute("DELETE FROM packets WHERE callsign = %s", (full,))
+    return {"deleted_station": _station_row(row), "deleted_positions": deleted}
+
+
+# --- Daten ------------------------------------------------------------------
+
+@app.get("/api/positions")
+def positions(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
+              limit: int = Query(30000, le=200000)):
+    """Positionen als kompakte Liste [callsign, ts(ms), lat, lon, speed, alt, course, comment].
+    Bei mehr als `limit` Punkten wird gleichmässig ausgedünnt."""
+    f = make_filter(calls, start, end)
+    where, params = f.where()
+    with db.conn() as c:
+        n = c.execute(f"SELECT count(*) AS n FROM positions WHERE {where}", params).fetchone()["n"]
+        step = max(1, math.ceil(n / limit))
+        rows = c.execute(
+            f"""SELECT callsign, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, lat, lon,
+                       speed_kmh, altitude_m, course, comment, source
+                FROM (SELECT *, row_number() OVER (ORDER BY ts) AS rn FROM positions WHERE {where}) x
+                WHERE rn %% %(step)s = 0 OR rn = 1 ORDER BY callsign, ts""",
+            {**params, "step": step},
+        ).fetchall()
+    return {
+        "total": n, "step": step,
+        "rows": [[r["callsign"], r["t"], r["lat"], r["lon"], r["speed_kmh"], r["altitude_m"],
+                  r["course"], r["comment"], r["source"]] for r in rows],
+    }
+
+
+@app.get("/api/latest")
+def latest(calls: CallsQ = None):
+    f = make_filter(calls, None, None)
+    where, params = f.where()
+    with db.conn() as c:
+        return c.execute(
+            f"""SELECT DISTINCT ON (callsign) callsign, ts, lat, lon, speed_kmh, course, altitude_m,
+                       comment, symbol, source
+                FROM positions WHERE {where} ORDER BY callsign, ts DESC""",
+            params,
+        ).fetchall()
+
+
+@app.get("/api/packets")
+def packets(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
+            limit: int = Query(200, le=2000)):
+    f = make_filter(calls, start, end)
+    where, params = f.where("received_at")
+    with db.conn() as c:
+        return c.execute(
+            f"""SELECT id, received_at, callsign, raw, digis, qconstruct, igate, format
+                FROM packets WHERE {where} ORDER BY received_at DESC LIMIT %(limit)s""",
+            {**params, "limit": limit},
+        ).fetchall()
+
+
+@app.get("/api/stats/summary")
+def stats_summary(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    with db.conn() as c:
+        return stats.summary(c, make_filter(calls, start, end))
+
+
+@app.get("/api/stats/distance")
+def stats_distance(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
+                   bucket: str = Query("day", pattern="^(hour|day|week|month|year)$")):
+    with db.conn() as c:
+        return stats.distance(c, make_filter(calls, start, end), bucket)
+
+
+@app.get("/api/stats/activity")
+def stats_activity(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    with db.conn() as c:
+        return stats.activity(c, make_filter(calls, start, end))
+
+
+@app.get("/api/stats/timeline")
+def stats_timeline(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    with db.conn() as c:
+        return stats.timeline(c, make_filter(calls, start, end))
+
+
+@app.get("/api/stats/trips")
+def stats_trips(calls: CallsQ = None, start: StartQ = None, end: EndQ = None, min_km: float = 1.0):
+    with db.conn() as c:
+        return stats.trips(c, make_filter(calls, start, end), min_km=min_km)
+
+
+@app.get("/api/stats/places")
+def stats_places(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
+                 eps: float = Query(150, ge=20, le=2000)):
+    with db.conn() as c:
+        return stats.places(c, make_filter(calls, start, end), eps_m=eps)
+
+
+@app.get("/api/stats/paths")
+def stats_paths(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    with db.conn() as c:
+        return stats.paths(c, make_filter(calls, start, end))
+
+
+@app.get("/api/status")
+def status():
+    with db.conn() as c:
+        col = c.execute("SELECT * FROM collector_status WHERE id = 1").fetchone()
+        counts = c.execute(
+            """SELECT (SELECT count(*) FROM positions) AS positions,
+                      (SELECT count(*) FROM packets) AS packets,
+                      (SELECT count(*) FROM stations) AS stations,
+                      pg_size_pretty(pg_database_size(current_database())) AS db_size"""
+        ).fetchone()
+        imports = c.execute("SELECT * FROM imports ORDER BY imported_at DESC LIMIT 20").fetchall()
+    return {"version": __version__, "collector": col, "counts": counts, "imports": imports}
+
+
+# --- Import / Export --------------------------------------------------------
+
+@app.post("/api/import")
+async def import_file(file: UploadFile = File(...), callsign: str = Form("")):
+    content = await file.read(MAX_UPLOAD + 1)
+    if len(content) > MAX_UPLOAD:
+        raise HTTPException(413, "Datei zu gross (max. 50 MB)")
+    try:
+        rows, errors = parse_file(content, file.filename or "", callsign.strip() or None)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise HTTPException(422, str(e))
+
+    imported = duplicate = 0
+    with db.conn() as c:
+        cur = c.cursor()
+        for call in {r["callsign"] for r in rows}:
+            ensure_station(cur, call, track=False)
+        for r in rows:
+            try:
+                if insert_position(cur, source="import", **r):
+                    imported += 1
+                else:
+                    duplicate += 1
+            except ValueError as e:
+                errors.append(f"{r['ts']:%Y-%m-%d %H:%M:%S}: {e}")
+        cur.execute(
+            """INSERT INTO imports (filename, callsign, rows_total, rows_imported, rows_duplicate, rows_error)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (file.filename, ", ".join(sorted({r["callsign"] for r in rows})) or None,
+             len(rows) + len(errors), imported, duplicate, len(errors)),
+        )
+    return {
+        "filename": file.filename, "rows": len(rows) + len(errors), "imported": imported,
+        "duplicate": duplicate, "errors": len(errors), "error_samples": errors[:20],
+        "callsigns": sorted({r["callsign"] for r in rows}),
+        "first": min((r["ts"] for r in rows), default=None),
+        "last": max((r["ts"] for r in rows), default=None),
+    }
+
+
+@app.get("/api/export.csv")
+def export_csv(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    f = make_filter(calls, start, end)
+    where, params = f.where()
+
+    def gen():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["callsign", "time_utc", "lat", "lng", "speed_kmh", "course", "altitude_m",
+                    "comment", "source"])
+        with db.conn() as c:
+            cur = c.cursor(name="export")
+            cur.execute(
+                f"""SELECT callsign, to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS t, lat, lon,
+                           speed_kmh, course, altitude_m, comment, source
+                    FROM positions WHERE {where} ORDER BY ts""",
+                params,
+            )
+            for r in cur:
+                w.writerow([r["callsign"], r["t"], r["lat"], r["lon"], r["speed_kmh"], r["course"],
+                            r["altitude_m"], r["comment"], r["source"]])
+                if buf.tell() > 65536:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+        yield buf.getvalue()
+
+    return StreamingResponse(gen(), media_type="text/csv",
+                             headers={"Content-Disposition": 'attachment; filename="aprs-stats.csv"'})
+
+
+# --- Oberfläche -------------------------------------------------------------
+
+@app.get("/healthz")
+def healthz():
+    with db.conn() as c:
+        c.execute("SELECT 1")
+    return {"ok": True}
+
+
+@app.get("/")
+def index():
+    return FileResponse(str(STATIC.joinpath("index.html")))
+
+
+app.mount("/", StaticFiles(directory=str(STATIC)), name="static")

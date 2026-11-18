@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="de-CH">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APRS-Stats</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <button class="icon-btn" id="toggle-side" aria-label="Filter ein-/ausblenden">☰</button>
+  <h1>APRS-Stats</h1>
+  <nav class="tabs" role="tablist">
+    <button data-tab="map" class="active">Karte</button>
+    <button data-tab="charts">Statistik</button>
+    <button data-tab="trips">Fahrten &amp; Orte</button>
+    <button data-tab="paths">Pfade</button>
+    <button data-tab="stations">Stationen &amp; Import</button>
+    <button data-tab="status">Status</button>
+  </nav>
+  <span class="pill" id="live-pill" title="Collector-Status">…</span>
+</header>
+
+<div class="layout">
+  <aside class="side" id="side">
+    <section>
+      <h2>Zeitraum</h2>
+      <div class="seg" id="ranges">
+        <button data-range="1d">24 h</button>
+        <button data-range="7d">7 T</button>
+        <button data-range="30d" class="active">30 T</button>
+        <button data-range="365d">1 J</button>
+        <button data-range="all">Alles</button>
+      </div>
+      <div class="custom-range">
+        <label>von <input type="date" id="from"></label>
+        <label>bis <input type="date" id="to"></label>
+      </div>
+    </section>
+    <section>
+      <h2>Geräte <button class="link" id="select-all">alle</button> <button class="link" id="select-none">keine</button></h2>
+      <div id="devices" class="devices"><p class="muted">Noch keine Stationen. Unter <b>Stationen &amp; Import</b> eintragen.</p></div>
+      <p class="muted small" id="sel-hint">Keine Auswahl = alle Geräte.</p>
+    </section>
+    <section>
+      <a class="btn wide" id="export-link" href="api/export.csv">CSV exportieren (Auswahl)</a>
+    </section>
+  </aside>
+
+  <main>
+    <div class="tiles" id="tiles"></div>
+
+    <section class="tab active" id="tab-map">
+      <div class="map-tools">
+        <label><input type="checkbox" id="lay-tracks" checked> Spuren</label>
+        <label><input type="checkbox" id="lay-points" checked> Punkte</label>
+        <label><input type="checkbox" id="lay-heat"> Heatmap</label>
+        <label><input type="checkbox" id="lay-latest" checked> Letzte Position</label>
+        <label><input type="checkbox" id="auto-refresh" checked> live aktualisieren</label>
+        <span class="muted small" id="map-info"></span>
+      </div>
+      <div id="map"></div>
+    </section>
+
+    <section class="tab" id="tab-charts">
+      <div class="card">
+        <div class="card-head">
+          <h2>Gefahrene Kilometer</h2>
+          <select id="bucket">
+            <option value="day">pro Tag</option>
+            <option value="week">pro Woche</option>
+            <option value="month" selected>pro Monat</option>
+            <option value="year">pro Jahr</option>
+          </select>
+        </div>
+        <div class="chart-box"><canvas id="chart-km"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Aktivität nach Wochentag und Uhrzeit</h2><span class="muted small">Anzahl Positionen, Ortszeit</span></div>
+        <div id="activity" class="activity"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Geschwindigkeit und Höhe</h2></div>
+        <div class="chart-box"><canvas id="chart-timeline"></canvas></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-trips">
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2>Fahrten</h2><span class="muted small">ab 1 km; eine Pause von mehr als 20 min beendet eine Fahrt. Klick zeigt sie auf der Karte.</span></div>
+          <div class="table-wrap"><table id="trips-table"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Orte</h2>
+            <label class="small">Radius <select id="eps"><option>75</option><option selected>150</option><option>300</option><option>1000</option></select> m</label>
+          </div>
+          <p class="muted small">Gruppen von Standpunkten (unter 5 km/h). Klick zeigt den Ort auf der Karte.</p>
+          <div class="table-wrap"><table id="places-table"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-paths">
+      <p class="muted">Pfade gibt es nur für Pakete, die live über APRS-IS empfangen wurden (der aprs.fi-Export enthält keine Pfade). APRS-IS liefert pro Paket meist nur den ersten Weg ins Netz.</p>
+      <div class="grid3">
+        <div class="card"><div class="card-head"><h2>Weg ins Netz</h2></div><div class="chart-box small-chart"><canvas id="chart-routes"></canvas></div></div>
+        <div class="card"><div class="card-head"><h2>Digipeater</h2></div><div class="table-wrap"><table id="digis-table"></table></div></div>
+        <div class="card"><div class="card-head"><h2>iGates</h2></div><div class="table-wrap"><table id="igates-table"></table></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Letzte Rohpakete</h2></div>
+        <div class="table-wrap"><table id="packets-table" class="mono"></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-stations">
+      <div class="grid2">
+        <div class="card">
+          <h2>Station eintragen</h2>
+          <form id="station-form" class="form">
+            <label>Rufzeichen <input name="callsign" required placeholder="HB9ABC" autocomplete="off" pattern="[A-Za-z0-9]{1,9}(-[A-Za-z0-9]{1,2})?"></label>
+            <label>SSID
+              <select name="ssid">
+                <option value="*">alle SSIDs (automatisch erkennen)</option>
+                <option value="">keine SSID</option>
+              </select>
+            </label>
+            <label>Bezeichnung <input name="label" placeholder="z. B. Auto, Handfunkgerät"></label>
+            <label>Farbe <input name="color" type="color" value="#2563eb"></label>
+            <label class="check"><input name="track" type="checkbox" checked> live über APRS-IS verfolgen</label>
+            <button class="btn primary" type="submit">Eintragen</button>
+            <p class="msg" id="station-msg"></p>
+          </form>
+          <p class="muted small">Mit <b>alle SSIDs</b> erscheint jedes Funkgerät des Rufzeichens (z. B. -7, -9) automatisch als eigenes Gerät, sobald es sendet.</p>
+        </div>
+        <div class="card">
+          <h2>Export importieren</h2>
+          <form id="import-form" class="form">
+            <label>Datei (CSV oder JSON, z. B. von aprs.fi/export) <input type="file" name="file" accept=".csv,.json,.txt" required multiple></label>
+            <label>Rufzeichen mit SSID, falls nicht in der Datei <input name="callsign" placeholder="HB9ABC-9" list="call-list" autocomplete="off"></label>
+            <datalist id="call-list"></datalist>
+            <button class="btn primary" type="submit">Importieren</button>
+          </form>
+          <div id="import-result"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Stationen</h2>
+        <div class="table-wrap"><table id="stations-table"></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-status">
+      <div class="grid2">
+        <div class="card"><h2>Collector (APRS-IS)</h2><dl id="collector" class="kv"></dl></div>
+        <div class="card"><h2>Datenbank</h2><dl id="dbinfo" class="kv"></dl></div>
+      </div>
+      <div class="card"><h2>Importe</h2><div class="table-wrap"><table id="imports-table"></table></div></div>
+    </section>
+  </main>
+</div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/leaflet-heat.js"></script>
+<script src="vendor/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

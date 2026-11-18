@@ -1,0 +1,65 @@
+name: aprs-stats
+
+# Drei Dienste:
+#   db        PostgreSQL + PostGIS (nur im internen Netz erreichbar)
+#   web       Weboberfläche und API (FastAPI), Port ${APRS_STATS_PORT:-8092}
+#   collector dauerhaft mit APRS-IS verbunden, speichert Pakete der eingetragenen Stationen
+
+x-app: &app
+  build: ./app
+  image: aprs-stats:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql://aprs:${POSTGRES_PASSWORD:-aprs}@db:5432/aprs
+    TZ: ${TZ:-Europe/Zurich}
+  depends_on:
+    db:
+      condition: service_healthy
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
+
+services:
+  db:
+    image: postgis/postgis:16-3.5
+    container_name: aprs-stats-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aprs
+      POSTGRES_USER: aprs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aprs}
+      TZ: ${TZ:-Europe/Zurich}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aprs -d aprs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 1g
+
+  web:
+    <<: *app
+    container_name: aprs-stats-web
+    command: ["uvicorn", "aprs_stats.web:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    ports:
+      - "${APRS_STATS_PORT:-8092}:8000"
+    mem_limit: 512m
+
+  collector:
+    <<: *app
+    container_name: aprs-stats-collector
+    command: ["python", "-m", "aprs_stats.collector"]
+    healthcheck:
+      disable: true
+    mem_limit: 256m
+
+volumes:
+  db-data:
