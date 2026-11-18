@@ -1,8 +1,8 @@
 # aprs-stats
 
-Version 0.2.0 · [Changelog](CHANGELOG.md) · Lizenz MIT
+Version 0.3.0 · [Changelog](CHANGELOG.md) · Lizenz MIT
 
-Selbst gehostete Statistik für APRS-Positionsdaten. Man trägt Rufzeichen mit SSID ein. Neue Daten kommen laufend live aus dem APRS-IS-Netz, ältere lassen sich als Export von aprs.fi importieren. Die Weboberfläche zeigt einzelne Funkgeräte (SSIDs) oder alle zusammen: auf der Karte, als Heatmap, in Grafiken und Tabellen.
+Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (Bake) für aprs.fi. Man trägt Rufzeichen mit SSID ein. Neue Daten kommen laufend live aus dem APRS-IS-Netz, ältere lassen sich als Export von aprs.fi importieren. Die Weboberfläche zeigt einzelne Funkgeräte (SSIDs) oder alle zusammen: auf der Karte, als Heatmap, in Grafiken und Tabellen.
 
 ## Inhalt
 
@@ -29,6 +29,7 @@ Selbst gehostete Statistik für APRS-Positionsdaten. Man trägt Rufzeichen mit S
 | Pfade | Digipeater, iGates, Weg ins Netz (Internet, direkt zum iGate, über Digipeater), letzte Rohpakete. |
 | Datenqualität | Falsche GPS-Höhen nach dem Einschalten und Ausreisser werden automatisch verworfen. |
 | Export | CSV der aktuellen Auswahl. |
+| Bake | Eine feste Position (z. B. Heimstation) mit Symbol regelmässig an APRS-IS senden, damit sie auf aprs.fi sichtbar bleibt. |
 
 ## Schnellstart
 
@@ -58,6 +59,15 @@ Erkannte Spalten (Gross-/Kleinschreibung und Einheiten in Klammern egal): `time`
 
 **Auswahl:** Links Zeitraum (24 h bis *Alles* oder eigene Daten) und Geräte wählen. Ein Klick auf das Rufzeichen wählt alle seine SSIDs. Keine Auswahl bedeutet alle Geräte. Alle Ansichten, Kacheln und der CSV-Export folgen dieser Auswahl.
 
+**Bake (feste Position publizieren):**
+
+1. In `.env` `APRS_IS_LOGIN` (dein Rufzeichen) und `APRS_IS_PASSCODE` (dein persönlicher APRS-IS-Passcode, z. B. aus deinem APRS-Client) eintragen und `docker compose up -d` ausführen. Der Tab **Bake** zeigt oben, ob der Login verifiziert ist.
+2. SSID wählen (die SSID unterscheidet die Bake von den mobilen Geräten; üblich für eine feste Station ist keine SSID oder z. B. -10), über **Symboltafel …** das Symbol wählen (primäre Tafel `/`, alternative Tafel `\`, optional mit Overlay-Zeichen 0–9/A–Z) und die Position eingeben oder auf der Karte setzen.
+3. Optional Höhe, Kommentar (höchstens 43 Zeichen) und Genauigkeit. Mit *~185 m* oder *~1,8 km* wird die Position absichtlich unscharf gesendet (APRS Position Ambiguity), etwa für die Wohnadresse.
+4. Intervall wählen (Standard 30 min) und speichern. Die Bake wird sofort und danach im Intervall gesendet. Unter dem Formular steht das genaue Paket.
+
+Gesendet wird nur mit verifiziertem Login und nur für das Rufzeichen des Logins, mit beliebiger SSID, und nur solange der Stack läuft. Das Paket geht nur ans Internet (APRS-IS), nicht über Funk.
+
 **Fahrten und Orte:** Ein Klick auf eine Fahrt zeigt genau diese Fahrt auf der Karte, ein Klick auf einen Ort zoomt dorthin.
 
 ## Konfiguration
@@ -69,14 +79,14 @@ Alle Einstellungen stehen in `.env` (Vorlage: [.env.example](.env.example)).
 | `POSTGRES_PASSWORD` | Passwort der Datenbank, **Pflicht**, nur Buchstaben und Ziffern | – |
 | `APRS_STATS_PORT` | Port der Oberfläche | `8092` |
 | `APRS_IS_LOGIN` | Login bei APRS-IS; leer = zuerst eingetragenes Rufzeichen | – |
-| `APRS_IS_PASSCODE` | APRS-IS-Passcode; `-1` genügt zum Mitlesen | `-1` |
+| `APRS_IS_PASSCODE` | APRS-IS-Passcode; `-1` genügt zum Mitlesen, für Baken der persönliche Passcode | `-1` |
 | `APRS_IS_SERVER` / `APRS_IS_PORT` | APRS-IS-Server | `rotate.aprs2.net` / `14580` |
 | `TZ` | Zeitzone für Tage, Wochentage, Uhrzeiten | `Europe/Zurich` |
 | `TRIP_GAP_MINUTES` | Pause, die eine Fahrt beendet | `20` |
 | `MAX_PLAUSIBLE_KMH` | schnellere Sprünge gelten als GPS-Fehler | `250` |
 | `LOG_LEVEL` | Log-Stufe des Collectors | `INFO` |
 
-aprs-stats sendet nichts ins APRS-Netz. Für das reine Mitlesen braucht es keinen gültigen Passcode.
+Ohne Bake sendet aprs-stats nichts ins APRS-Netz; für das reine Mitlesen braucht es keinen gültigen Passcode.
 
 ## Wie die Auswertungen rechnen
 
@@ -110,20 +120,20 @@ APRS-IS (rotate.aprs2.net:14580)        aprs.fi-Export (CSV/JSON)
 |---|---|---|
 | `db` | `aprs-stats-db` | PostgreSQL 16 mit PostGIS, Volume `db-data`, nur im internen Netz |
 | `web` | `aprs-stats-web` | Oberfläche (Leaflet, Leaflet.heat, Chart.js, lokal ausgeliefert) und API |
-| `collector` | `aprs-stats-collector` | APRS-IS-Verbindung, speichert Pakete und Positionen |
+| `collector` | `aprs-stats-collector` | APRS-IS-Verbindung, speichert Pakete und Positionen, sendet Baken |
 
-Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe), `collector_status`, `imports`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
+Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate; gesendete Baken mit Quelle `beacon`), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe), `beacons`, `collector_status`, `imports`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
 
 Code in [app/aprs_stats/](app/aprs_stats/):
 
 | Datei | Inhalt |
 |---|---|
 | `web.py` | API und Auslieferung der Oberfläche |
-| `collector.py` | APRS-IS-Client mit Neuverbindung und Statusmeldung |
+| `collector.py` | APRS-IS-Client mit Neuverbindung, Statusmeldung und Senden der Baken |
 | `importer.py` | Einlesen von CSV/JSON, Spaltenerkennung |
 | `stats.py` | SQL für Kilometer, Fahrten, Orte, Aktivität, Pfade |
 | `altitude.py` | Höhenfilter |
-| `aprs.py` | Rufzeichen, Filter, Pfadzerlegung |
+| `aprs.py` | Rufzeichen, Filter, Pfadzerlegung, Positionspakete für Baken |
 | `store.py` | Speichern mit Duplikaterkennung |
 | `static/` | Oberfläche (HTML, CSS, JavaScript, Bibliotheken) |
 
@@ -156,6 +166,7 @@ Sicherungen und Exporte gehören nicht ins Repository; die `.gitignore` schliess
 - Passwörter und der APRS-IS-Passcode stehen nur in `.env`. Diese Datei ist in `.gitignore` und wird nie committet. `docker-compose.yml` enthält keine Standardpasswörter: Ohne `POSTGRES_PASSWORD` startet der Stack nicht.
 - Die Datenbank ist nur im internen Docker-Netz erreichbar, nicht vom Host.
 - Die Container laufen schreibgeschützt, ohne Linux-Capabilities und ohne Rechteausweitung; die Web-App als eigener Benutzer.
+- Baken werden nur mit verifiziertem Login und nur für das Rufzeichen des Logins gesendet, frühestens alle 10 min. Wer die Oberfläche erreicht, kann aber Baken für dieses Rufzeichen anlegen. Ein weiterer Grund, sie nicht offen ins Internet zu stellen.
 - Die Oberfläche hat **keine Anmeldung**. Sie ist für das Heimnetz gedacht und darf nicht direkt ins Internet. Für den Zugriff von aussen einen Reverse-Proxy mit Anmeldung oder ein VPN davorschalten.
 - Positionsdaten sind persönliche Daten. Exporte und Sicherungen entsprechend aufbewahren.
 
@@ -176,3 +187,4 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/). Die Versi
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE). Mitgelieferte Bibliotheken: Leaflet 1.9.4 (BSD-2), Leaflet.heat 0.2.0 (BSD-2), Chart.js 4.4.1 (MIT).
+APRS-Symbole: [aprs.fi symbol set](https://github.com/hessu/aprs-symbols) von Heikki Hannikainen, OH7LZB; Symbolbeschreibungen: [aprs-symbol-index](https://github.com/hessu/aprs-symbol-index) (CC BY-SA 4.0).

@@ -80,3 +80,24 @@ def test_parse_json():
     data = b'{"entries":[{"name":"HB3XVA-9","time":1777636800,"lat":"47.1","lng":"8.3"}]}'
     rows, errors = parse_file(data, "x.json")
     assert rows[0]["ts"].year == 2026 and not errors
+
+
+def test_position_packet():
+    import aprslib
+    from aprs_stats.aprs import format_lat, format_lon, position_packet
+    assert format_lat(47.16233) == "4709.74N"
+    assert format_lon(8.28733) == "00817.24E"
+    assert format_lat(-33.5) == "3330.00S" and format_lon(-70.25) == "07015.00W"
+    assert format_lat(47.16233, 2) == "4709.  N"
+    assert format_lon(8.28733, 1) == "00817.2 E"
+    pkt = position_packet("HB3XVA-10", 47.16233, 8.28733, "/", "-", "QRV 2m/70cm", 470)
+    assert pkt == "HB3XVA-10>APZSTA,TCPIP*:!4709.74N/00817.24E-/A=001542QRV 2m/70cm"
+    p = aprslib.parse(pkt)
+    assert abs(p["latitude"] - 47.16233) < 0.0001 and p["symbol"] == "-" and p["symbol_table"] == "/"
+    assert round(p["altitude"]) == 470
+    # Overlay auf alternativer Tafel
+    assert ":!4709.74NI00817.24E&" in position_packet("HB3XVA", 47.16233, 8.28733, "I", "&")
+    with pytest.raises(ValueError):
+        position_packet("HB3XVA", 47.1, 8.2, "x", "-")
+    with pytest.raises(ValueError):
+        position_packet("HB3XVA", 47.1, 8.2, "/", "-", "x" * 44)

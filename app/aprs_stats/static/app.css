@@ -33,6 +33,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -189,3 +190,57 @@ td input[type="color"] { width: 34px; height: 26px; padding: 1px; }
   .grid2 { grid-template-columns: 1fr; }
   #map { height: 65vh; }
 }
+
+/* APRS-Symbole (Sprites 16 x 6, 48 px pro Symbol) */
+.sym { display: inline-block; position: relative; width: 24px; height: 24px; flex-shrink: 0;
+       background-repeat: no-repeat; background-size: 384px 144px; }
+.sym .ov { position: absolute; inset: 0; background-repeat: no-repeat; background-size: 384px 144px; }
+.sym.big { width: 40px; height: 40px; background-size: 640px 240px; }
+.sym.big .ov { background-size: 640px 240px; }
+.sym-icon { background: none; border: 0; }
+
+.symbol-field { display: flex; align-items: center; gap: 12px; padding: 8px 10px;
+                border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); }
+.symbol-field .btn { margin-left: auto; }
+.sym-desc { font-weight: 600; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.mini-map { height: 260px; border-radius: 9px; border: 1px solid var(--border); }
+.packet-preview { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px;
+                  background: var(--panel-2); }
+.packet-preview code { font-size: 12px; word-break: break-all; }
+.packet-preview code.err { color: var(--err); }
+.actions { display: flex; gap: 8px; }
+.notice { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--warn); color: var(--text);
+          background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
+.notice.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, var(--panel)); }
+.notice code { font-size: 12.5px; }
+
+.beacon { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; align-items: start;
+          padding: 10px 0; border-bottom: 1px solid var(--border); }
+.beacon:last-child { border-bottom: 0; }
+.beacon .meta { font-size: 12.5px; color: var(--muted); }
+.beacon .meta code { font-size: 11.5px; word-break: break-all; color: var(--text); }
+.beacon .btns { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; }
+.beacon .btn { padding: 4px 9px; font-size: 12.5px; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid currentColor; }
+.badge.on { color: var(--ok); }
+.badge.off { color: var(--muted); }
+
+dialog#symbol-dialog { border: 1px solid var(--border); border-radius: 14px; padding: 0; background: var(--panel);
+                       color: var(--text); width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 40px); }
+dialog#symbol-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.sym-dialog { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.sym-dialog .card-head { margin: 0; }
+.sym-tabs { width: auto; }
+.sym-tabs button { padding: 6px 12px; flex: none; }
+.overlay-field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+#sym-search { flex: 1; min-width: 120px; }
+.sym-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px;
+            overflow-y: auto; max-height: 60vh; }
+.sym-grid button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 5px 7px;
+                   border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text);
+                   font: inherit; font-size: 12px; cursor: pointer; }
+.sym-grid button:hover { background: var(--panel-2); }
+.sym-grid button.sel { border-color: var(--accent); background: var(--panel-2); }
+.sym-grid button code { color: var(--muted); font-size: 11px; }
+@media (max-width: 860px) { .row2 { grid-template-columns: 1fr; } }

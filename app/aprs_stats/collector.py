@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import aprslib
 
 from . import __version__, db
-from .aprs import build_filter, matches, parse_path
+from .aprs import build_filter, full_call, matches, parse_path, position_packet, split_full
 from .altitude import clean_callsign
 from .store import ensure_station, insert_position
 
@@ -25,6 +25,8 @@ PORT = int(os.environ.get("APRS_IS_PORT", "14580"))
 LOGIN = os.environ.get("APRS_IS_LOGIN", "").strip().upper()
 PASSCODE = os.environ.get("APRS_IS_PASSCODE", "-1").strip() or "-1"
 READ_TIMEOUT = 120      # s ohne Daten -> neu verbinden
+BEACON_CHECK = 5        # s zwischen Prüfungen auf fällige Baken
+BEACON_MIN_GAP = 60     # s Mindestabstand zwischen zwei Sendungen derselben Bake
 FILTER_CHECK = 15       # s zwischen Prüfungen auf geänderte Stationen
 STATUS_EVERY = 20       # s zwischen Status-Updates
 
@@ -37,6 +39,7 @@ class Collector:
         self.packets_total = 0
         self.last_packet_at = None
         self.connected_since = None
+        self.verified = False
 
     # --- Datenbank -------------------------------------------------------
     def stations(self) -> list[tuple[str, str]]:
@@ -45,6 +48,54 @@ class Collector:
             "SELECT callsign, ssid FROM stations WHERE track ORDER BY auto, id"
         ).fetchall()
         return [(r["callsign"], r["ssid"]) for r in rows]
+
+    def beacons_enabled(self) -> bool:
+        return bool(self.db.execute("SELECT 1 FROM beacons WHERE enabled LIMIT 1").fetchone())
+
+    def send_beacons(self, sock: socket.socket, login: str) -> None:
+        """Fällige Baken senden. Nur mit verifiziertem Login und nur für das eigene Rufzeichen."""
+        due = self.db.execute(
+            """SELECT * FROM beacons
+               WHERE enabled AND (next_due_at IS NULL OR next_due_at <= now())
+                 AND (last_sent_at IS NULL OR last_sent_at <= now() - make_interval(secs => %s))
+               ORDER BY id""",
+            (BEACON_MIN_GAP,),
+        ).fetchall()
+        for b in due:
+            full = full_call(b["callsign"], b["ssid"])
+            error = None
+            if not self.verified:
+                error = ("APRS-IS-Login nicht verifiziert: APRS_IS_LOGIN und APRS_IS_PASSCODE in .env prüfen")
+            elif split_full(login)[0] != b["callsign"]:
+                error = f"Rufzeichen {b['callsign']} passt nicht zum APRS-IS-Login {login}"
+            if error:
+                self.db.execute(
+                    "UPDATE beacons SET last_error = %s, next_due_at = now() + interval '5 minutes' WHERE id = %s",
+                    (error, b["id"]),
+                )
+                continue
+            try:
+                pkt = position_packet(full, b["lat"], b["lon"], b["symbol_table"], b["symbol_code"],
+                                      b["comment"], b["altitude_m"], b["ambiguity"])
+                sock.sendall((pkt + "\r\n").encode("utf-8"))
+            except ValueError as e:
+                self.db.execute("UPDATE beacons SET last_error = %s, enabled = false WHERE id = %s",
+                                (f"Ungültige Bake, deaktiviert: {e}", b["id"]))
+                continue
+            now = datetime.now(timezone.utc)
+            with self.db.transaction():
+                self.db.execute(
+                    """UPDATE beacons SET last_sent_at = %s, sent_count = sent_count + 1, last_packet = %s,
+                              last_error = NULL, next_due_at = %s + make_interval(mins => interval_min)
+                       WHERE id = %s""",
+                    (now, pkt, now, b["id"]),
+                )
+                self.db.execute(
+                    """INSERT INTO packets (received_at, source, callsign, tocall, raw, format)
+                       VALUES (%s, 'beacon', %s, %s, %s, 'uncompressed')""",
+                    (now, full, pkt.split(">", 1)[1].split(",", 1)[0], pkt),
+                )
+            log.info("Bake gesendet: %s", pkt)
 
     def status(self, state: str, *, flt: str | None = None, error: str | None = None, login: str | None = None):
         try:
@@ -116,19 +167,22 @@ class Collector:
         log.info("%s", raw)
 
     # --- Verbindung ------------------------------------------------------
-    def session(self, stations: list[tuple[str, str]], flt: str) -> None:
+    def session(self, stations: list[tuple[str, str]], flt: str, beacons: bool) -> None:
         # Ohne APRS_IS_LOGIN: Rufzeichen der zuerst eingetragenen Station
-        login = LOGIN or stations[0][0]
-        log.info("Verbinde mit %s:%s als %s, Filter %s", SERVER, PORT, login, flt)
+        login = LOGIN or (stations[0][0] if stations else "N0CALL")
+        log.info("Verbinde mit %s:%s als %s, Filter %s", SERVER, PORT, login, flt or "(keiner)")
         self.status("connecting", flt=flt, login=login)
         sock = socket.create_connection((SERVER, PORT), timeout=30)
+        self.verified = False
+        logged_in = False
         try:
             sock.sendall(
-                f"user {login} pass {PASSCODE} vers aprs-stats {__version__} filter {flt}\r\n".encode()
+                f"user {login} pass {PASSCODE} vers aprs-stats {__version__}"
+                f"{' filter ' + flt if flt else ''}\r\n".encode()
             )
             self.connected_since = datetime.now(timezone.utc)
             buf = b""
-            last_rx = last_check = last_status = time.monotonic()
+            last_rx = last_check = last_status = last_beacon = time.monotonic()
             self.status("connected", flt=flt, login=login)
             while True:
                 ready, _, _ = select.select([sock], [], [], 5)
@@ -147,7 +201,10 @@ class Collector:
                         if text.startswith("#"):
                             if "logresp" in text:
                                 log.info("%s", text)
-                                self.status("connected", flt=flt, login=f"{login} ({text.split('logresp', 1)[1].strip()})")
+                                resp = text.split("logresp", 1)[1].strip()
+                                self.verified = " verified" in f" {resp}" and "unverified" not in resp
+                                logged_in = True
+                                self.status("connected", flt=flt, login=f"{login} ({resp})")
                             continue
                         try:
                             self.store(text, stations)
@@ -156,9 +213,12 @@ class Collector:
                             self.db = db.connect()
                 if now - last_rx > READ_TIMEOUT:
                     raise TimeoutError(f"{READ_TIMEOUT} s keine Daten vom Server")
+                if logged_in and now - last_beacon > BEACON_CHECK:
+                    last_beacon = now
+                    self.send_beacons(sock, login)
                 if now - last_check > FILTER_CHECK:
                     last_check = now
-                    if self.stations() != stations:
+                    if self.stations() != stations or self.beacons_enabled() != beacons:
                         log.info("Stationen geändert, verbinde neu")
                         return
                 if now - last_status > STATUS_EVERY:
@@ -173,12 +233,13 @@ class Collector:
         while True:
             stations = self.stations()
             flt = build_filter(stations)
-            if not flt:
+            beacons = self.beacons_enabled()
+            if not flt and not beacons:
                 self.status("idle", flt="", error=None)
                 time.sleep(FILTER_CHECK)
                 continue
             try:
-                self.session(stations, flt)
+                self.session(stations, flt, beacons)
                 backoff = 5
             except Exception as e:  # Netz, Server, DB
                 log.warning("Verbindung beendet: %s", e)

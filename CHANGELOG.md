@@ -3,6 +3,23 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.3.0] – 2026-11-18
+
+### Neu
+- Tab **Bake**: eine feste Position (z. B. Heimstation) regelmässig an APRS-IS senden, damit sie auf
+  aprs.fi dauerhaft sichtbar ist. Rufzeichen mit SSID, Symbol, Position (Eingabe oder Klick auf die
+  Karte), Höhe, Kommentar (max. 43 Zeichen), Intervall (10 min bis 6 h), Positionsunschärfe.
+  Paketvorschau, „Jetzt senden“, Pausieren, Link zu aprs.fi.
+- Symboltafel mit allen Symbolen der primären und alternativen Tafel, Overlay-Zeichen und Suche
+  (aprs.fi symbol set von OH7LZB).
+- Karte zeigt die letzte Position mit dem gesendeten APRS-Symbol und aktive Baken.
+- Gesendete Baken erscheinen im Paket-Log (Quelle `beacon`).
+
+### Sicherheit
+- Gesendet wird nur mit verifiziertem APRS-IS-Login (`APRS_IS_LOGIN` und `APRS_IS_PASSCODE` in
+  `.env`) und nur für das Rufzeichen des Logins. Mindestintervall 10 min, frühestens 60 s nach der
+  letzten Sendung.
+
 ## [0.2.0] – 2026-11-18
 
 ### Neu
@@ -29,5 +46,6 @@ MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehl
 - Karte (Spuren, Punkte, Heatmap, letzte Position), Kilometer, Aktivität, Geschwindigkeit/Höhe,
   Fahrten, Orte, Digipeater/iGates, CSV-Export.
 
+[0.3.0]: https://github.com/defendeggu/aprs-stats/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/defendeggu/aprs-stats/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/defendeggu/aprs-stats/releases/tag/v0.1.0

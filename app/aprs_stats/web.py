@@ -2,11 +2,13 @@
 import csv
 import io
 import math
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from importlib.resources import files
 from typing import Annotated
 
+import psycopg
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__, db, stats
 from .altitude import clean_all, clean_callsign
-from .aprs import full_call, normalize_callsign, normalize_ssid
+from .aprs import MAX_COMMENT_BYTES, full_call, normalize_callsign, normalize_ssid, position_packet, split_full
 from .importer import parse_file
 from .store import ensure_station, insert_position
 
@@ -329,6 +331,161 @@ def export_csv(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
 
     return StreamingResponse(gen(), media_type="text/csv",
                              headers={"Content-Disposition": 'attachment; filename="aprs-stats.csv"'})
+
+
+# --- Baken ------------------------------------------------------------------
+
+APRS_IS_LOGIN = os.environ.get("APRS_IS_LOGIN", "").strip().upper()
+APRS_IS_PASSCODE = os.environ.get("APRS_IS_PASSCODE", "-1").strip() or "-1"
+
+
+class BeaconIn(BaseModel):
+    callsign: str
+    ssid: str = ""
+    symbol_table: str = Field("/", min_length=1, max_length=1)
+    symbol_code: str = Field("-", min_length=1, max_length=1)
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    altitude_m: float | None = None
+    ambiguity: int = Field(0, ge=0, le=4)
+    comment: str | None = Field(None, max_length=200)
+    interval_min: int = Field(30, ge=10, le=1440)
+    enabled: bool = True
+
+
+def _beacon_values(b: BeaconIn) -> dict:
+    """Prüft eine Bake und liefert die Werte für die Datenbank samt Paketvorschau."""
+    try:
+        base, ssid_from_call = normalize_callsign(b.callsign)
+        ssid = normalize_ssid(b.ssid) if b.ssid.strip() else ssid_from_call
+        if ssid == "*":
+            raise ValueError("Eine Bake braucht eine feste SSID (oder keine)")
+        if APRS_IS_LOGIN and split_full(APRS_IS_LOGIN)[0] != base:
+            raise ValueError(f"Baken sind nur für das eigene Rufzeichen ({split_full(APRS_IS_LOGIN)[0]}) erlaubt")
+        comment = (b.comment or "").strip() or None
+        packet = position_packet(full_call(base, ssid), b.lat, b.lon, b.symbol_table, b.symbol_code,
+                                 comment, b.altitude_m, b.ambiguity)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"callsign": base, "ssid": ssid, "symbol_table": b.symbol_table, "symbol_code": b.symbol_code,
+            "lat": b.lat, "lon": b.lon, "altitude_m": b.altitude_m, "ambiguity": b.ambiguity,
+            "comment": comment, "interval_min": b.interval_min, "enabled": b.enabled, "packet": packet}
+
+
+def _beacon_row(r: dict) -> dict:
+    r = dict(r)
+    r["full"] = full_call(r["callsign"], r["ssid"])
+    try:
+        r["packet"] = position_packet(r["full"], r["lat"], r["lon"], r["symbol_table"], r["symbol_code"],
+                                      r["comment"], r["altitude_m"], r["ambiguity"])
+    except ValueError as e:
+        r["packet"] = None
+        r["last_error"] = r["last_error"] or str(e)
+    return r
+
+
+@app.get("/api/beacons/config")
+def beacon_config():
+    """Ob Senden möglich ist: Login und Passcode gesetzt, Login vom Server verifiziert."""
+    with db.conn() as c:
+        col = c.execute("SELECT state, login, updated_at FROM collector_status WHERE id = 1").fetchone()
+    login_text = (col or {}).get("login") or ""
+    return {
+        "login": APRS_IS_LOGIN or None,
+        "callsign": split_full(APRS_IS_LOGIN)[0] if APRS_IS_LOGIN else None,
+        "passcode_set": APRS_IS_PASSCODE != "-1",
+        "verified": " verified" in f" {login_text}" and "unverified" not in login_text,
+        "collector_login": login_text or None,
+        "max_comment": MAX_COMMENT_BYTES,
+    }
+
+
+@app.get("/api/beacons")
+def list_beacons():
+    with db.conn() as c:
+        rows = c.execute("SELECT * FROM beacons ORDER BY callsign, ssid").fetchall()
+    return [_beacon_row(r) for r in rows]
+
+
+@app.post("/api/beacons/preview")
+def preview_beacon(b: BeaconIn):
+    return {"packet": _beacon_values(b)["packet"]}
+
+
+@app.post("/api/beacons", status_code=201)
+def add_beacon(b: BeaconIn):
+    v = _beacon_values(b)
+    v.pop("packet")
+    with db.conn() as c:
+        exists = c.execute("SELECT 1 FROM beacons WHERE callsign = %s AND ssid = %s",
+                           (v["callsign"], v["ssid"])).fetchone()
+        if exists:
+            raise HTTPException(409, f"Für {full_call(v['callsign'], v['ssid'])} gibt es schon eine Bake")
+        row = c.execute(
+            """INSERT INTO beacons (callsign, ssid, symbol_table, symbol_code, lat, lon, altitude_m, ambiguity,
+                                    comment, interval_min, enabled, next_due_at)
+               VALUES (%(callsign)s, %(ssid)s, %(symbol_table)s, %(symbol_code)s, %(lat)s, %(lon)s,
+                       %(altitude_m)s, %(ambiguity)s, %(comment)s, %(interval_min)s, %(enabled)s, now())
+               RETURNING *""",
+            v,
+        ).fetchone()
+    return _beacon_row(row)
+
+
+@app.put("/api/beacons/{bid}")
+def update_beacon(bid: int, b: BeaconIn):
+    """Bake ändern. Ist sie aktiv, wird sie sofort mit den neuen Werten gesendet."""
+    v = _beacon_values(b)
+    v.pop("packet")
+    with db.conn() as c:
+        try:
+            row = c.execute(
+                """UPDATE beacons SET callsign = %(callsign)s, ssid = %(ssid)s, symbol_table = %(symbol_table)s,
+                          symbol_code = %(symbol_code)s, lat = %(lat)s, lon = %(lon)s, altitude_m = %(altitude_m)s,
+                          ambiguity = %(ambiguity)s, comment = %(comment)s, interval_min = %(interval_min)s,
+                          enabled = %(enabled)s, next_due_at = now(), last_error = NULL
+                   WHERE id = %(id)s RETURNING *""",
+                {**v, "id": bid},
+            ).fetchone()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, f"Für {full_call(v['callsign'], v['ssid'])} gibt es schon eine Bake")
+    if not row:
+        raise HTTPException(404, "Bake nicht gefunden")
+    return _beacon_row(row)
+
+
+@app.post("/api/beacons/{bid}/send")
+def send_beacon_now(bid: int):
+    """Bake beim nächsten Durchlauf des Collectors (innert 5 s) senden; frühestens 60 s nach der letzten."""
+    with db.conn() as c:
+        row = c.execute("UPDATE beacons SET next_due_at = now() WHERE id = %s AND enabled RETURNING *",
+                        (bid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Bake nicht gefunden oder nicht aktiv")
+    return _beacon_row(row)
+
+
+@app.patch("/api/beacons/{bid}")
+def toggle_beacon(bid: int, enabled: bool):
+    with db.conn() as c:
+        row = c.execute(
+            """UPDATE beacons SET enabled = %s,
+                      next_due_at = CASE WHEN %s THEN now() ELSE next_due_at END, last_error = NULL
+               WHERE id = %s RETURNING *""",
+            (enabled, enabled, bid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Bake nicht gefunden")
+    return _beacon_row(row)
+
+
+@app.delete("/api/beacons/{bid}")
+def delete_beacon(bid: int):
+    with db.conn() as c:
+        row = c.execute("DELETE FROM beacons WHERE id = %s RETURNING *", (bid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Bake nicht gefunden")
+    return {"deleted": _beacon_row(row)}
 
 
 # --- Oberfläche -------------------------------------------------------------

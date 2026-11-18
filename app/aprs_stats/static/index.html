@@ -18,6 +18,7 @@
     <button data-tab="trips">Fahrten &amp; Orte</button>
     <button data-tab="paths">Pfade</button>
     <button data-tab="stations">Stationen &amp; Import</button>
+    <button data-tab="beacons">Bake</button>
     <button data-tab="status">Status</button>
   </nav>
   <span class="pill" id="live-pill" title="Collector-Status">…</span>
@@ -153,6 +154,79 @@
       </div>
     </section>
 
+    <section class="tab" id="tab-beacons">
+      <div class="notice" id="beacon-notice" hidden></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2 id="beacon-form-title">Feste Position publizieren</h2></div>
+          <form id="beacon-form" class="form" autocomplete="off">
+            <input type="hidden" name="id">
+            <div class="row2">
+              <label>Rufzeichen <input name="callsign" required pattern="[A-Za-z0-9]{1,9}"></label>
+              <label>SSID
+                <select name="ssid"><option value="">keine</option></select>
+              </label>
+            </div>
+            <div class="symbol-field">
+              <span class="sym-preview" id="sym-preview"></span>
+              <div>
+                <div id="sym-desc" class="sym-desc"></div>
+                <div class="muted small">Symbol-ID <code id="sym-id"></code></div>
+              </div>
+              <button type="button" class="btn" id="open-symbols">Symboltafel …</button>
+            </div>
+            <input type="hidden" name="symbol_table" value="/">
+            <input type="hidden" name="symbol_code" value="-">
+            <div class="row2">
+              <label>Breite (lat) <input name="lat" type="number" step="0.00001" min="-90" max="90" required placeholder="47.16233"></label>
+              <label>Länge (lon) <input name="lon" type="number" step="0.00001" min="-180" max="180" required placeholder="8.28733"></label>
+            </div>
+            <div id="beacon-map" class="mini-map"></div>
+            <p class="muted small">Auf die Karte klicken oder den Marker ziehen, um die Position zu setzen.</p>
+            <div class="row2">
+              <label>Höhe (m, optional) <input name="altitude_m" type="number" step="1"></label>
+              <label>Genauigkeit
+                <select name="ambiguity">
+                  <option value="0">exakt (~18 m)</option>
+                  <option value="1">~185 m</option>
+                  <option value="2">~1,8 km</option>
+                  <option value="3">~18 km</option>
+                </select>
+              </label>
+            </div>
+            <label>Kommentar <span class="muted small" id="comment-count"></span>
+              <input name="comment" maxlength="43" placeholder="z. B. QRV 2m/70cm">
+            </label>
+            <div class="row2">
+              <label>Intervall
+                <select name="interval_min">
+                  <option value="10">alle 10 min</option>
+                  <option value="15">alle 15 min</option>
+                  <option value="20">alle 20 min</option>
+                  <option value="30" selected>alle 30 min</option>
+                  <option value="60">jede Stunde</option>
+                  <option value="120">alle 2 h</option>
+                  <option value="360">alle 6 h</option>
+                </select>
+              </label>
+              <label class="check"><input name="enabled" type="checkbox" checked> aktiv (senden)</label>
+            </div>
+            <div class="packet-preview"><span class="muted small">Paket</span><code id="packet-preview">–</code></div>
+            <div class="actions">
+              <button class="btn primary" type="submit" id="beacon-submit">Speichern und senden</button>
+              <button class="btn" type="button" id="beacon-cancel" hidden>Abbrechen</button>
+            </div>
+            <p class="msg" id="beacon-msg"></p>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Baken</h2>
+          <div id="beacon-list"></div>
+          <p class="muted small">Die Bake wird über APRS-IS gesendet und im gewählten Intervall wiederholt, damit sie auf aprs.fi sichtbar bleibt. Gesendet wird nur, solange der Stack läuft.</p>
+        </div>
+      </div>
+    </section>
+
     <section class="tab" id="tab-status">
       <div class="grid2">
         <div class="card"><h2>Collector (APRS-IS)</h2><dl id="collector" class="kv"></dl></div>
@@ -162,6 +236,26 @@
     </section>
   </main>
 </div>
+
+<dialog id="symbol-dialog">
+  <form method="dialog" class="sym-dialog">
+    <div class="card-head">
+      <h2>Symboltafel</h2>
+      <div class="seg sym-tabs" id="sym-tabs">
+        <button type="button" data-t="/" class="active">Primär /</button>
+        <button type="button" data-t="\">Alternativ \</button>
+      </div>
+      <label class="small overlay-field" id="overlay-field">Overlay
+        <select id="sym-overlay"><option value="">keins</option></select>
+      </label>
+      <input id="sym-search" type="search" placeholder="Suchen …">
+      <button class="btn" value="close">Schliessen</button>
+    </div>
+    <div id="sym-grid" class="sym-grid"></div>
+    <p class="muted small">Symbole: <a href="https://github.com/hessu/aprs-symbols" target="_blank" rel="noopener">aprs.fi symbol set</a> von Hessu, OH7LZB.
+      Beschreibungen: <a href="https://github.com/hessu/aprs-symbol-index" target="_blank" rel="noopener">aprs-symbol-index</a> (CC BY-SA 4.0).</p>
+  </form>
+</dialog>
 
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/leaflet-heat.js"></script>

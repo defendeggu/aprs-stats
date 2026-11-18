@@ -262,12 +262,24 @@ async function loadMap() {
 async function loadLatest() {
   const q = new URLSearchParams(query());
   q.delete("from"); q.delete("to");
-  const latest = await api("latest?" + q.toString());
+  const [latest, beacons] = await Promise.all([api("latest?" + q.toString()), api("beacons").catch(() => [])]);
   layers.latest.clearLayers();
   for (const p of latest) {
-    L.circleMarker([p.lat, p.lon], { radius: 8, color: "#fff", weight: 2, fillColor: colorOf(p.callsign), fillOpacity: 1, renderer })
-      .bindTooltip(`${esc(p.callsign)} · ${ago(p.ts)}`, { permanent: true, direction: "right", offset: [8, 0], className: "call-label" })
-      .bindPopup(popupFor([p.callsign, p.ts, p.lat, p.lon, p.speed_kmh, p.altitude_m, p.course, p.comment, p.source, p.altitude_raw]))
+    const popup = popupFor([p.callsign, p.ts, p.lat, p.lon, p.speed_kmh, p.altitude_m, p.course, p.comment, p.source, p.altitude_raw]);
+    const tip = [`${esc(p.callsign)} · ${ago(p.ts)}`, { permanent: true, direction: "right", offset: [12, 0], className: "call-label" }];
+    if (p.symbol && p.symbol.length === 2 && symbolHtml(p.symbol[0], p.symbol[1])) {
+      L.marker([p.lat, p.lon], { icon: symbolIcon(p.symbol[0], p.symbol[1]) })
+        .bindTooltip(...tip).bindPopup(popup).addTo(layers.latest);
+    } else {
+      L.circleMarker([p.lat, p.lon], { radius: 8, color: "#fff", weight: 2, fillColor: colorOf(p.callsign), fillOpacity: 1, renderer })
+        .bindTooltip(...tip).bindPopup(popup).addTo(layers.latest);
+    }
+  }
+  for (const b of beacons.filter(b => b.enabled)) {
+    L.marker([b.lat, b.lon], { icon: symbolIcon(b.symbol_table, b.symbol_code) })
+      .bindTooltip(`${esc(b.full)} · Bake`, { permanent: true, direction: "right", offset: [12, 0], className: "call-label" })
+      .bindPopup(`<b>${esc(b.full)}</b> (Bake)<br>${esc(symbolDesc(b.symbol_table, b.symbol_code))}<br>
+        ${b.comment ? `<i>${esc(b.comment)}</i><br>` : ""}zuletzt gesendet: ${b.last_sent_at ? ago(b.last_sent_at) : "noch nie"}`)
       .addTo(layers.latest);
   }
 }
@@ -565,6 +577,275 @@ async function loadStatus() {
     : `<tbody><tr><td class="muted">Noch keine Importe.</td></tr></tbody>`;
 }
 
+/* ---------- APRS-Symbole ---------- */
+let SYMBOLS = {};
+const OVERLAYS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function spritePos(ch, size) {
+  const i = ch.charCodeAt(0) - 33;
+  if (i < 0 || i > 93) return null;
+  return `-${(i % 16) * size}px -${Math.floor(i / 16) * size}px`;
+}
+/* table: "/" primär, "\" alternativ, 0-9/A-Z = alternativ mit Overlay */
+function symbolHtml(table, code, big = false) {
+  const size = big ? 40 : 24;
+  const pos = spritePos(code || "", size);
+  if (!pos || !table) return "";
+  const sheet = table === "/" ? 0 : 1;
+  const overlay = table !== "/" && table !== "\\" ? table : null;
+  const ov = overlay ? `<span class="ov" style="background-image:url(vendor/aprs-symbols/aprs-symbols-24-2@2x.png);background-position:${spritePos(overlay, size)}"></span>` : "";
+  return `<span class="sym${big ? " big" : ""}" style="background-image:url(vendor/aprs-symbols/aprs-symbols-24-${sheet}@2x.png);background-position:${pos}">${ov}</span>`;
+}
+function symbolIcon(table, code) {
+  return L.divIcon({ html: symbolHtml(table, code), className: "sym-icon", iconSize: [24, 24], iconAnchor: [12, 12] });
+}
+function symbolDesc(table, code) {
+  const t = table === "/" ? "/" : "\\";
+  const d = SYMBOLS[t + code];
+  const base = (d && d.description) || "(nicht belegt)";
+  return table !== "/" && table !== "\\" ? `${base}, Overlay ${table}` : base;
+}
+function symbolId(table, code) { return table + code; }
+
+/* ---------- Symboltafel ---------- */
+const symDlg = $("#symbol-dialog");
+let symTab = "/";
+(function fillOverlay() {
+  $("#sym-overlay").insertAdjacentHTML("beforeend", [...OVERLAYS].map(c => `<option>${c}</option>`).join(""));
+})();
+function renderSymbolGrid() {
+  const q = $("#sym-search").value.trim().toLowerCase();
+  const curT = beaconForm.symbol_table.value, curC = beaconForm.symbol_code.value;
+  const curSheet = curT === "/" ? "/" : "\\";
+  const overlay = symTab === "\\" ? $("#sym-overlay").value : "";
+  $("#overlay-field").hidden = symTab !== "\\";
+  let html = "";
+  for (let i = 33; i <= 126; i++) {
+    const code = String.fromCharCode(i);
+    const d = SYMBOLS[symTab + code];
+    const desc = (d && d.description) || "";
+    if (q && !desc.toLowerCase().includes(q) && !(symTab + code).toLowerCase().includes(q)) continue;
+    const table = overlay || symTab;
+    const sel = curSheet === symTab && curC === code;
+    html += `<button type="button" data-code="${esc(code)}" class="${sel ? "sel" : ""}" title="${esc(table + code)}">
+      ${symbolHtml(table, code)}<span>${esc(desc || "(nicht belegt)")}</span> <code>${esc(table + code)}</code></button>`;
+  }
+  $("#sym-grid").innerHTML = html || `<p class="muted">Kein Symbol gefunden.</p>`;
+}
+$("#open-symbols").onclick = () => {
+  const t = beaconForm.symbol_table.value;
+  symTab = t === "/" ? "/" : "\\";
+  $("#sym-overlay").value = t !== "/" && t !== "\\" ? t : "";
+  $$("#sym-tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === symTab));
+  $("#sym-search").value = "";
+  renderSymbolGrid();
+  symDlg.showModal();
+};
+$("#sym-tabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  symTab = b.dataset.t;
+  $$("#sym-tabs button").forEach(x => x.classList.toggle("active", x === b));
+  renderSymbolGrid();
+});
+$("#sym-search").addEventListener("input", renderSymbolGrid);
+$("#sym-overlay").addEventListener("change", renderSymbolGrid);
+$("#sym-grid").addEventListener("click", e => {
+  const b = e.target.closest("button[data-code]"); if (!b) return;
+  const overlay = symTab === "\\" ? $("#sym-overlay").value : "";
+  setSymbol(overlay || symTab, b.dataset.code);
+  symDlg.close();
+});
+
+/* ---------- Baken ---------- */
+const beaconForm = $("#beacon-form");
+let beaconMap = null, beaconMarker = null, beaconConfig = null, beacons = [];
+(function fillBeaconSsid() {
+  const sel = beaconForm.ssid;
+  for (let i = 1; i <= 15; i++) sel.insertAdjacentHTML("beforeend", `<option value="${i}">-${i}</option>`);
+})();
+
+function setSymbol(table, code) {
+  beaconForm.symbol_table.value = table;
+  beaconForm.symbol_code.value = code;
+  $("#sym-preview").innerHTML = symbolHtml(table, code, true);
+  $("#sym-desc").textContent = symbolDesc(table, code);
+  $("#sym-id").textContent = symbolId(table, code);
+  previewBeacon();
+}
+
+function ensureBeaconMap() {
+  if (beaconMap) { setTimeout(() => beaconMap.invalidateSize(), 0); return; }
+  beaconMap = L.map("beacon-map", { layers: [L.tileLayer(osm._url, { maxZoom: 19, attribution: osm.options.attribution })] })
+    .setView([46.8, 8.2], 7);
+  beaconMap.on("click", e => setBeaconPos(e.latlng.lat, e.latlng.lng));
+  setTimeout(() => beaconMap.invalidateSize(), 0);
+}
+function setBeaconPos(lat, lon, pan = false) {
+  beaconForm.lat.value = lat.toFixed(5);
+  beaconForm.lon.value = lon.toFixed(5);
+  placeBeaconMarker(pan);
+  previewBeacon();
+}
+function placeBeaconMarker(pan) {
+  const lat = parseFloat(beaconForm.lat.value), lon = parseFloat(beaconForm.lon.value);
+  if (!beaconMap || isNaN(lat) || isNaN(lon)) return;
+  const icon = symbolIcon(beaconForm.symbol_table.value, beaconForm.symbol_code.value);
+  if (!beaconMarker) {
+    beaconMarker = L.marker([lat, lon], { draggable: true, icon }).addTo(beaconMap);
+    beaconMarker.on("dragend", () => { const p = beaconMarker.getLatLng(); setBeaconPos(p.lat, p.lng); });
+  } else {
+    beaconMarker.setLatLng([lat, lon]).setIcon(icon);
+  }
+  if (pan) beaconMap.setView([lat, lon], Math.max(beaconMap.getZoom(), 15));
+}
+for (const n of ["lat", "lon"]) beaconForm[n].addEventListener("change", () => { placeBeaconMarker(true); previewBeacon(); });
+
+function beaconBody() {
+  const f = beaconForm;
+  const alt = f.altitude_m.value.trim();
+  return {
+    callsign: f.callsign.value.trim(), ssid: f.ssid.value,
+    symbol_table: f.symbol_table.value, symbol_code: f.symbol_code.value,
+    lat: parseFloat(f.lat.value), lon: parseFloat(f.lon.value),
+    altitude_m: alt === "" ? null : parseFloat(alt), ambiguity: parseInt(f.ambiguity.value, 10),
+    comment: f.comment.value, interval_min: parseInt(f.interval_min.value, 10), enabled: f.enabled.checked,
+  };
+}
+
+let previewTimer = null;
+function previewBeacon() {
+  const n = new TextEncoder().encode(beaconForm.comment.value).length;
+  $("#comment-count").textContent = `${n}/${beaconConfig ? beaconConfig.max_comment : 43}`;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const b = beaconBody(), out = $("#packet-preview");
+    placeBeaconMarker(false);
+    if (!b.callsign || isNaN(b.lat) || isNaN(b.lon)) { out.textContent = "–"; out.className = ""; return; }
+    try {
+      const r = await api("beacons/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+      out.textContent = r.packet; out.className = "";
+    } catch (err) { out.textContent = err.message; out.className = "err"; }
+  }, 250);
+}
+beaconForm.addEventListener("input", e => { if (e.target.name !== "lat" && e.target.name !== "lon") previewBeacon(); });
+
+function resetBeaconForm() {
+  beaconForm.reset();
+  beaconForm.id.value = "";
+  if (beaconConfig && beaconConfig.callsign) beaconForm.callsign.value = beaconConfig.callsign;
+  $("#beacon-form-title").textContent = "Feste Position publizieren";
+  $("#beacon-submit").textContent = "Speichern und senden";
+  $("#beacon-cancel").hidden = true;
+  if (beaconMarker) { beaconMarker.remove(); beaconMarker = null; }
+  setSymbol("/", "-");
+}
+$("#beacon-cancel").onclick = () => { resetBeaconForm(); $("#beacon-msg").textContent = ""; };
+
+function editBeacon(b) {
+  const f = beaconForm;
+  f.id.value = b.id; f.callsign.value = b.callsign; f.ssid.value = b.ssid;
+  f.lat.value = b.lat.toFixed(5); f.lon.value = b.lon.toFixed(5);
+  f.altitude_m.value = b.altitude_m ?? ""; f.ambiguity.value = b.ambiguity;
+  f.comment.value = b.comment || ""; f.interval_min.value = b.interval_min; f.enabled.checked = b.enabled;
+  if (![...f.interval_min.options].some(o => o.value == b.interval_min)) {
+    f.interval_min.insertAdjacentHTML("beforeend", `<option value="${b.interval_min}">alle ${b.interval_min} min</option>`);
+    f.interval_min.value = b.interval_min;
+  }
+  $("#beacon-form-title").textContent = `Bake ${b.full} bearbeiten`;
+  $("#beacon-submit").textContent = "Speichern";
+  $("#beacon-cancel").hidden = false;
+  setSymbol(b.symbol_table, b.symbol_code);
+  ensureBeaconMap();
+  placeBeaconMarker(true);
+  beaconForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+beaconForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const id = beaconForm.id.value, msg = $("#beacon-msg");
+  try {
+    const b = await api(id ? `beacons/${id}` : "beacons", {
+      method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(beaconBody()),
+    });
+    msg.className = "msg ok";
+    msg.textContent = !b.enabled ? `${b.full} gespeichert (pausiert).`
+      : beaconConfig && beaconConfig.verified ? `${b.full} gespeichert. Der Collector sendet die Bake innert weniger Sekunden.`
+      : `${b.full} gespeichert. Gesendet wird, sobald der APRS-IS-Login verifiziert ist (siehe Hinweis oben).`;
+    resetBeaconForm();
+    await loadBeacons();
+  } catch (err) { msg.className = "msg err"; msg.textContent = err.message; }
+});
+
+function renderBeaconNotice() {
+  const c = beaconConfig, n = $("#beacon-notice");
+  n.hidden = false;
+  if (!c.login || !c.passcode_set) {
+    n.className = "notice";
+    n.innerHTML = `<b>Senden ist noch nicht eingerichtet.</b> Für das Publizieren braucht es einen verifizierten APRS-IS-Login.
+      In <code>.env</code> eintragen: <code>APRS_IS_LOGIN=</code>dein Rufzeichen und <code>APRS_IS_PASSCODE=</code>dein persönlicher Passcode,
+      danach <code>docker compose up -d</code>. Baken lassen sich schon vorbereiten; gesendet wird erst mit gültigem Login.`;
+  } else if (!c.verified) {
+    n.className = "notice";
+    n.innerHTML = `<b>APRS-IS-Login nicht verifiziert</b> (${esc(c.collector_login || "Collector noch nicht verbunden")}).
+      Passcode in <code>.env</code> prüfen und <code>docker compose up -d</code> ausführen.`;
+  } else {
+    n.className = "notice ok";
+    n.innerHTML = `Senden aktiv als <b>${esc(c.login)}</b> (verifiziert). Baken sind nur für das Rufzeichen ${esc(c.callsign)} mit beliebiger SSID möglich.`;
+  }
+}
+
+async function loadBeacons() {
+  [beaconConfig, beacons] = await Promise.all([api("beacons/config"), api("beacons")]);
+  renderBeaconNotice();
+  if (!beaconForm.id.value && !beaconForm.callsign.value && beaconConfig.callsign) beaconForm.callsign.value = beaconConfig.callsign;
+  ensureBeaconMap();
+  if (!beaconForm.lat.value && !beaconMap._centered) {
+    beaconMap._centered = true;
+    // Vorschlag: letzte bekannte Position
+    try {
+      const latest = await api("latest");
+      if (latest.length) beaconMap.setView([latest[0].lat, latest[0].lon], 13);
+    } catch { /* egal */ }
+  }
+  $("#beacon-list").innerHTML = beacons.length ? beacons.map(b => `
+    <div class="beacon" data-id="${b.id}">
+      <span>${symbolHtml(b.symbol_table, b.symbol_code, true)}</span>
+      <div>
+        <div><b>${esc(b.full)}</b> <span class="badge ${b.enabled ? "on" : "off"}">${b.enabled ? "aktiv" : "pausiert"}</span>
+          <span class="muted small">${esc(symbolDesc(b.symbol_table, b.symbol_code))}</span></div>
+        <div class="meta">${b.lat.toFixed(5)}, ${b.lon.toFixed(5)}${b.altitude_m != null ? ` · ${fmtInt.format(b.altitude_m)} m` : ""}
+          · alle ${b.interval_min} min${b.ambiguity ? ` · unscharf (Stufe ${b.ambiguity})` : ""}</div>
+        <div class="meta">gesendet: ${b.sent_count}× · zuletzt ${b.last_sent_at ? `${dt(b.last_sent_at)} (${ago(b.last_sent_at)})` : "noch nie"}
+          ${b.enabled && b.next_due_at ? ` · nächste ${dt(b.next_due_at)}` : ""}</div>
+        ${b.last_error ? `<div class="meta err">${esc(b.last_error)}</div>` : ""}
+        <div class="meta"><code>${esc(b.packet || "")}</code></div>
+      </div>
+      <div class="btns">
+        <a class="btn" href="https://aprs.fi/info/a/${encodeURIComponent(b.full)}" target="_blank" rel="noopener">aprs.fi</a>
+        <button class="btn" data-act="edit">Bearbeiten</button>
+        ${b.enabled ? `<button class="btn" data-act="send">Jetzt senden</button>` : ""}
+        <button class="btn" data-act="toggle">${b.enabled ? "Pausieren" : "Aktivieren"}</button>
+        <button class="btn danger" data-act="del">Löschen</button>
+      </div>
+    </div>`).join("") : `<p class="muted">Noch keine Bake. Links Rufzeichen, Symbol und Position wählen.</p>`;
+}
+
+$("#beacon-list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]"); if (!btn) return;
+  const id = btn.closest(".beacon").dataset.id;
+  const b = beacons.find(x => String(x.id) === id);
+  try {
+    if (btn.dataset.act === "edit") return editBeacon(b);
+    if (btn.dataset.act === "send") await api(`beacons/${id}/send`, { method: "POST" });
+    if (btn.dataset.act === "toggle") await api(`beacons/${id}?enabled=${!b.enabled}`, { method: "PATCH" });
+    if (btn.dataset.act === "del") {
+      if (!confirm(`Bake ${b.full} löschen? Sie wird danach nicht mehr gesendet.`)) return;
+      await api(`beacons/${id}`, { method: "DELETE" });
+    }
+  } catch (err) { alert(err.message); }
+  await loadBeacons();
+});
+
 /* ---------- Ablauf ---------- */
 function exportLink() { $("#export-link").href = "api/export.csv?" + query(); }
 
@@ -576,6 +857,7 @@ async function refreshTab() {
     else if (state.tab === "paths") await loadPaths();
     else if (state.tab === "stations") await loadStations();
     else if (state.tab === "status") await loadStatus();
+    else if (state.tab === "beacons") await loadBeacons();
   } catch (err) { console.error(err); }
 }
 
@@ -594,9 +876,12 @@ setInterval(async () => {
   loadSummary().catch(() => {});
   if (state.tab === "map") loadMap().catch(() => {});
   if (state.tab === "stations") loadStations().catch(() => {});
+  if (state.tab === "beacons") loadBeacons().catch(() => {});
 }, 30000);
 
 (async function init() {
+  try { SYMBOLS = (await (await fetch("vendor/aprs-symbols/symbols.json")).json()).symbols; } catch { SYMBOLS = {}; }
+  setSymbol("/", "-");
   $$("#ranges button").forEach(x => x.classList.toggle("active", x.dataset.range === state.range));
   if (!["1d", "7d", "30d", "365d", "all"].includes(state.range)) state.range = "30d";
   await loadStations().catch(console.error);

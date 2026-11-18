@@ -84,3 +84,26 @@ CREATE TABLE IF NOT EXISTS imports (
     rows_duplicate  int,
     rows_error      int
 );
+
+-- ab 0.3.0: Baken – eigene feste Position regelmässig an APRS-IS senden
+CREATE TABLE IF NOT EXISTS beacons (
+    id            serial PRIMARY KEY,
+    callsign      text NOT NULL,
+    ssid          text NOT NULL DEFAULT '',
+    symbol_table  text NOT NULL DEFAULT '/',
+    symbol_code   text NOT NULL DEFAULT '-',
+    lat           double precision NOT NULL,
+    lon           double precision NOT NULL,
+    altitude_m    real,
+    ambiguity     int NOT NULL DEFAULT 0 CHECK (ambiguity BETWEEN 0 AND 4),
+    comment       text,
+    interval_min  int NOT NULL DEFAULT 30 CHECK (interval_min BETWEEN 10 AND 1440),
+    enabled       boolean NOT NULL DEFAULT true,
+    next_due_at   timestamptz,
+    last_sent_at  timestamptz,
+    sent_count    int NOT NULL DEFAULT 0,
+    last_packet   text,
+    last_error    text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (callsign, ssid)
+);
