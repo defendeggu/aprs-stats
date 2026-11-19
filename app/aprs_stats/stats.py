@@ -14,13 +14,13 @@ MIN_SEG_KM = 0.05                                                  # GPS-Zittern
 
 @dataclass
 class Filter:
-    calls: list[str]
+    calls: list[str] | None                                        # None = alle, [] = keine
     start: datetime | None = None
     end: datetime | None = None
 
     def where(self, ts_col: str = "ts", call_col: str = "callsign") -> tuple[str, dict]:
         parts, params = ["true"], {}
-        if self.calls:
+        if self.calls is not None:
             parts.append(f"{call_col} = ANY(%(calls)s)")
             params["calls"] = self.calls
         if self.start:

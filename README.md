@@ -1,6 +1,6 @@
 # aprs-stats
 
-Author: Adrian S / HB3XVA & Anthropic Claude - v0.3.2
+Author: Adrian S / HB3XVA & Anthropic Claude - v0.3.3
 
 [Changelog](CHANGELOG.md) · Lizenz MIT
 
@@ -59,7 +59,7 @@ Danach <http://localhost:8092> öffnen und unter **Stationen & Import** das erst
 
 Erkannte Spalten (Gross-/Kleinschreibung und Einheiten in Klammern egal): `time`/`timestamp`/`date`, `lat`, `lng`/`lon`, `speed`, `course`, `altitude`, `comment`, `name`/`callsign`. Trennzeichen `,` `;` oder Tab, Dezimalkomma geht auch. Zeiten ohne Zeitzone gelten als UTC, Unix-Zeitstempel werden erkannt.
 
-**Auswahl:** Links Zeitraum (24 h bis *Alles* oder eigene Daten) und Geräte wählen. Ein Klick auf das Rufzeichen wählt alle seine SSIDs. Keine Auswahl bedeutet alle Geräte. Alle Ansichten, Kacheln und der CSV-Export folgen dieser Auswahl.
+**Auswahl:** Links Zeitraum (24 h bis *Alles* oder eigene Daten) und Geräte wählen. Ein Klick auf das Rufzeichen wählt alle seine SSIDs. *alle* wählt alle Geräte, auch solche, die später dazukommen; *keine* wählt alle ab, Karte und Statistik sind dann leer. Alle Ansichten, Kacheln und der CSV-Export folgen dieser Auswahl.
 
 **Bake (feste Position publizieren):**
 

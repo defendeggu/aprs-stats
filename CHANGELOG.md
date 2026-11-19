@@ -3,6 +3,14 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.3.3] – 2026-11-19
+
+### Behoben
+- Geräteauswahl: Der Knopf **keine** wählte zwar alle Geräte ab, Karte und Statistik zeigten aber
+  weiterhin alle Geräte, weil eine leere Auswahl als „alle“ galt. Jetzt zeigt **keine** nichts an,
+  **alle** zeigt alle Geräte (auch neu hinzukommende).
+- API: Der Parameter `calls` unterscheidet jetzt zwischen fehlend (alle Geräte) und leer (`calls=`, keine Geräte).
+
 ## [0.3.2] – 2026-11-19
 
 ### Neu

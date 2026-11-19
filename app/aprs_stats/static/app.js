@@ -11,7 +11,8 @@ const fmtD = new Intl.DateTimeFormat("de-CH", { dateStyle: "medium" });
 
 const state = {
   stations: [],
-  selected: new Set(load("selected", [])),
+  // Auswahl: all = alle Geräte (auch neu hinzukommende), sonst genau die Geräte in selected (leer = keine)
+  ...loadSelection(),
   range: load("range", "30d"),
   from: null, to: null,
   tab: "map",
@@ -21,6 +22,15 @@ const state = {
 /* ---------- Hilfen ---------- */
 function load(k, d) { try { const v = localStorage.getItem("aprs-stats:" + k); return v ? JSON.parse(v) : d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem("aprs-stats:" + k, JSON.stringify(v)); } catch { /* egal */ } }
+function loadSelection() {
+  const s = load("selection", null);
+  if (s && typeof s === "object") return { all: !!s.all, selected: new Set(s.calls || []) };
+  const old = load("selected", []);                              // bis 0.3.2: leere Liste = alle
+  return { all: !old.length, selected: new Set(old) };
+}
+function saveSelection() { save("selection", { all: state.all, calls: [...state.selected] }); }
+function isSelected(call) { return state.all || state.selected.has(call); }
+function selectOnly(calls) { state.all = false; state.selected = new Set(calls); saveSelection(); }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -58,8 +68,10 @@ function labelOf(call) { const s = devices().find(d => d.full === call); return 
 
 function query(extra = {}) {
   const p = new URLSearchParams();
-  const sel = [...state.selected].filter(c => devices().some(d => d.full === c));
-  if (sel.length && sel.length < devices().length) p.set("calls", sel.join(","));
+  if (!state.all) {
+    const sel = [...state.selected].filter(c => devices().some(d => d.full === c));
+    p.set("calls", sel.join(","));                               // leer = keine Geräte
+  }
   if (state.from) p.set("from", state.from.toISOString());
   if (state.to) p.set("to", state.to.toISOString());
   for (const [k, v] of Object.entries(extra)) p.set(k, v);
@@ -94,12 +106,12 @@ function renderDevices() {
   for (const d of list) (groups[d.callsign] ||= []).push(d);
   const wild = new Set(state.stations.filter(s => s.ssid === "*" && s.track).map(s => s.callsign));
   box.innerHTML = Object.entries(groups).map(([base, ds]) => {
-    const allOn = ds.every(d => state.selected.has(d.full));
+    const allOn = ds.every(d => isSelected(d.full));
     return `<div class="dev-group">
       <label><input type="checkbox" data-group="${esc(base)}" ${allOn ? "checked" : ""}> ${esc(base)}
         ${wild.has(base) ? `<span class="wild">alle SSIDs live</span>` : ""}</label>
       ${ds.map(d => `<label class="dev" title="${esc(d.full)}">
-        <input type="checkbox" data-call="${esc(d.full)}" ${state.selected.has(d.full) ? "checked" : ""}>
+        <input type="checkbox" data-call="${esc(d.full)}" ${isSelected(d.full) ? "checked" : ""}>
         <span class="dot" style="background:${colorOf(d.full)}"></span>
         <span title="${esc(ssidTitle(d.ssid))}">${esc(ssidLabel(d.ssid))}</span>
         <span class="lbl">${esc(d.label || "")}</span>
@@ -110,27 +122,32 @@ function renderDevices() {
   const grpBoxes = $$("input[data-group]", box);
   for (const g of grpBoxes) {
     const ds = groups[g.dataset.group];
-    const n = ds.filter(d => state.selected.has(d.full)).length;
+    const n = ds.filter(d => isSelected(d.full)).length;
     g.indeterminate = n > 0 && n < ds.length;
   }
-  $("#sel-hint").textContent = state.selected.size ? `${state.selected.size} von ${list.length} Geräten gewählt.` : "Keine Auswahl = alle Geräte.";
+  const n = list.filter(d => isSelected(d.full)).length;
+  $("#sel-hint").textContent = state.all ? "Alle Geräte gewählt."
+    : n ? `${n} von ${list.length} Geräten gewählt.`
+    : "Kein Gerät gewählt.";
   $("#call-list").innerHTML = list.map(d => `<option value="${esc(d.full)}">`).join("");
 }
 
 $("#devices").addEventListener("change", e => {
   const t = e.target;
-  if (t.dataset.call) {
-    t.checked ? state.selected.add(t.dataset.call) : state.selected.delete(t.dataset.call);
-  } else if (t.dataset.group) {
-    for (const d of devices().filter(d => d.callsign === t.dataset.group)) {
-      t.checked ? state.selected.add(d.full) : state.selected.delete(d.full);
-    }
+  if (!t.dataset.call && !t.dataset.group) return;
+  if (state.all) {                                               // "alle" in explizite Liste umwandeln
+    state.all = false;
+    state.selected = new Set(devices().map(d => d.full));
   }
+  const calls = t.dataset.call ? [t.dataset.call]
+    : devices().filter(d => d.callsign === t.dataset.group).map(d => d.full);
+  for (const c of calls) t.checked ? state.selected.add(c) : state.selected.delete(c);
+  if (devices().every(d => state.selected.has(d.full))) { state.all = true; state.selected.clear(); }
   selectionChanged();
 });
-$("#select-all").onclick = () => { devices().forEach(d => state.selected.add(d.full)); selectionChanged(); };
-$("#select-none").onclick = () => { state.selected.clear(); selectionChanged(); };
-function selectionChanged() { save("selected", [...state.selected]); renderDevices(); state.fitNext = true; refresh(); }
+$("#select-all").onclick = () => { state.all = true; state.selected.clear(); selectionChanged(); };
+$("#select-none").onclick = () => { state.all = false; state.selected.clear(); selectionChanged(); };
+function selectionChanged() { saveSelection(); renderDevices(); state.fitNext = true; refresh(); }
 
 $("#ranges").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
@@ -251,7 +268,8 @@ async function loadMap() {
   await loadLatest();
   $("#map-info").textContent = data.total
     ? `${fmtInt.format(data.total)} Positionen${data.step > 1 ? `, jede ${data.step}. angezeigt` : ""}`
-    : "Keine Positionen im gewählten Zeitraum.";
+    : (!state.all && !devices().some(d => state.selected.has(d.full)))
+      ? "Kein Gerät gewählt." : "Keine Positionen im gewählten Zeitraum.";
 
   if (state.fitNext && rows.length) {
     map.fitBounds(L.latLngBounds(rows.map(r => [r[2], r[3]])), { padding: [30, 30], maxZoom: 15 });
@@ -392,7 +410,7 @@ async function loadTrips() {
   $("#trips-table").onclick = e => {
     const tr = e.target.closest("tr[data-i]"); if (!tr) return;
     const t = trips[tr.dataset.i];
-    state.selected = new Set([t.callsign]); save("selected", [...state.selected]);
+    selectOnly([t.callsign]);
     state.range = "custom";
     $$("#ranges button").forEach(x => x.classList.remove("active"));
     // Zeitraum exakt auf die Fahrt setzen (Datumsfelder zeigen den Tag)
@@ -466,6 +484,7 @@ async function loadStations() {
   state.stations = await api("stations");
   // neue Geräte in eine bestehende Auswahl nicht automatisch aufnehmen; ungültige entfernen
   for (const c of [...state.selected]) if (!devices().some(d => d.full === c)) state.selected.delete(c);
+  saveSelection();
   renderDevices();
   renderStationsTable();
 }

@@ -38,11 +38,12 @@ app = FastAPI(title="aprs-stats", version=__version__, lifespan=lifespan)
 # --- Hilfen -----------------------------------------------------------------
 
 def make_filter(calls: str | None, start: datetime | None, end: datetime | None) -> stats.Filter:
-    lst = [c.strip().upper() for c in (calls or "").split(",") if c.strip()]
+    # Parameter fehlt = alle Geräte; Parameter leer (calls=) = keine Geräte
+    lst = None if calls is None else [c.strip().upper() for c in calls.split(",") if c.strip()]
     return stats.Filter(calls=lst, start=start, end=end)
 
 
-CallsQ = Annotated[str | None, Query(description="Rufzeichen mit SSID, kommagetrennt; leer = alle")]
+CallsQ = Annotated[str | None, Query(description="Rufzeichen mit SSID, kommagetrennt; fehlt = alle, leer = keine")]
 StartQ = Annotated[datetime | None, Query(alias="from")]
 EndQ = Annotated[datetime | None, Query(alias="to")]
 
