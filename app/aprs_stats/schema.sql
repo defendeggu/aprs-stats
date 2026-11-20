@@ -107,3 +107,54 @@ CREATE TABLE IF NOT EXISTS beacons (
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (callsign, ssid)
 );
+
+-- ab 0.4.0: Gemeinde- und Kantonsgrenzen (swissBOUNDARIES3D von swisstopo, siehe boundaries.py)
+-- areas: Hoheitsgebiete (Gemeinden, Kommunanzen, Seen in Kantonsbesitz), auch FL und Enklaven
+CREATE TABLE IF NOT EXISTS areas (
+    id         serial PRIMARY KEY,
+    bfs_nr     int NOT NULL,
+    name       text NOT NULL,
+    kind       text NOT NULL,              -- Gemeindegebiet | Kommunanz | Kantonsgebiet
+    kanton_nr  int,
+    country    text NOT NULL,              -- CH, LI, DE (Büsingen), IT (Campione)
+    geom       geometry(MultiPolygon, 4326) NOT NULL,
+    geom_s     geometry(Geometry, 4326)    -- vereinfacht für die Karte
+);
+CREATE INDEX IF NOT EXISTS areas_geom ON areas USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS kantone (
+    nr      int PRIMARY KEY,
+    abbr    text NOT NULL,
+    name    text NOT NULL,
+    geom_s  geometry(Geometry, 4326)
+);
+
+CREATE TABLE IF NOT EXISTS boundaries_meta (
+    id         int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    state      text,                       -- loading | ready | error
+    version    text,
+    source     text,
+    loaded_at  timestamptz,
+    gemeinden  int,
+    message    text,
+    updated_at timestamptz
+);
+
+-- Gebiet jeder Position: areas.id, 0 = ausserhalb aller Gebiete, NULL = noch nicht zugeordnet
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS area int;
+CREATE INDEX IF NOT EXISTS positions_area_todo ON positions (id) WHERE area IS NULL;
+CREATE INDEX IF NOT EXISTS positions_area ON positions (area);
+
+-- ab 0.4.0: Namen für Orte (manuell oder Vorschlag von OpenStreetMap Nominatim)
+CREATE TABLE IF NOT EXISTS place_names (
+    id          serial PRIMARY KEY,
+    name        text NOT NULL,
+    lat         double precision NOT NULL,
+    lon         double precision NOT NULL,
+    geom        geometry(Point, 4326) NOT NULL,
+    radius_m    real NOT NULL DEFAULT 150,
+    source      text NOT NULL DEFAULT 'manual',   -- manual | nominatim
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS place_names_geom ON place_names USING gist (geom);

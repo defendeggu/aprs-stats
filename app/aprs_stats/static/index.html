@@ -16,6 +16,7 @@
     <button data-tab="map" class="active">Karte</button>
     <button data-tab="charts">Statistik</button>
     <button data-tab="trips">Fahrten &amp; Orte</button>
+    <button data-tab="areas">Gemeinden</button>
     <button data-tab="paths">Pfade</button>
     <button data-tab="stations">Stationen &amp; Import</button>
     <button data-tab="beacons">Bake</button>
@@ -59,6 +60,8 @@
         <label><input type="checkbox" id="lay-points" checked> Punkte</label>
         <label><input type="checkbox" id="lay-heat"> Heatmap</label>
         <label><input type="checkbox" id="lay-latest" checked> Letzte Position</label>
+        <label title="Besuchte Gemeinden einfärben, Kantonsgrenzen zeigen"><input type="checkbox" id="lay-areas"> Gemeinden</label>
+        <label title="Benannte Orte zeigen"><input type="checkbox" id="lay-places" checked> Ortsnamen</label>
         <label><input type="checkbox" id="auto-refresh" checked> live aktualisieren</label>
         <span class="muted small" id="map-info"></span>
       </div>
@@ -98,8 +101,27 @@
           <div class="card-head"><h2>Orte</h2>
             <label class="small">Radius <select id="eps"><option>75</option><option selected>150</option><option>300</option><option>1000</option></select> m</label>
           </div>
-          <p class="muted small">Gruppen von Standpunkten (unter 5 km/h). Klick zeigt den Ort auf der Karte.</p>
+          <p class="muted small">Gruppen von Standpunkten (unter 5 km/h). Klick zeigt den Ort auf der Karte, ✎ gibt ihm einen Namen.
+            Ohne eigenen Namen steht die Gemeinde da.</p>
           <div class="table-wrap"><table id="places-table"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-areas">
+      <div class="notice" id="areas-notice" hidden></div>
+      <div class="areas-source muted small" id="areas-source"></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2>Kantone</h2><span class="muted small">besuchte Gemeinden von allen Gemeinden des Kantons</span></div>
+          <div class="table-wrap"><table id="kantone-table"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Gemeinden</h2>
+            <input id="gem-search" type="search" placeholder="Suchen …" class="small-input">
+          </div>
+          <p class="muted small">Auch Seen in Kantonsbesitz, Kommunanzen und Liechtenstein. km zählen zur Gemeinde, in der ein Abschnitt endet. Klick zeigt die Gemeinde auf der Karte.</p>
+          <div class="table-wrap"><table id="gemeinden-table"></table></div>
         </div>
       </div>
     </section>
@@ -256,6 +278,26 @@
     <div id="sym-grid" class="sym-grid"></div>
     <p class="muted small">Symbole: <a href="https://github.com/hessu/aprs-symbols" target="_blank" rel="noopener">aprs.fi symbol set</a> von Hessu, OH7LZB.
       Beschreibungen: <a href="https://github.com/hessu/aprs-symbol-index" target="_blank" rel="noopener">aprs-symbol-index</a> (CC BY-SA 4.0).</p>
+  </form>
+</dialog>
+
+<dialog id="place-dialog">
+  <form method="dialog" class="sym-dialog" id="place-form" autocomplete="off">
+    <div class="card-head"><h2>Ort benennen</h2></div>
+    <p class="muted small" id="place-info"></p>
+    <label class="field">Name <input name="name" maxlength="120" placeholder="z. B. Zuhause, Arbeit, Parkplatz Bahnhof"></label>
+    <div class="actions wrap">
+      <button type="button" class="btn" id="place-osm">Vorschlag von OpenStreetMap</button>
+      <span class="muted small" id="place-osm-msg"></span>
+    </div>
+    <p class="muted small">Der Vorschlag schickt die Koordinaten des Orts an <a href="https://nominatim.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap Nominatim</a>.
+      Ohne Klick verlässt nichts den Server.</p>
+    <p class="msg" id="place-msg"></p>
+    <div class="actions">
+      <button type="submit" class="btn primary" value="save" id="place-save">Speichern</button>
+      <button type="button" class="btn danger" id="place-delete" hidden>Name entfernen</button>
+      <button type="button" class="btn" id="place-cancel">Abbrechen</button>
+    </div>
   </form>
 </dialog>
 

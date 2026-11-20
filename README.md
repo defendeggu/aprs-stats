@@ -1,6 +1,6 @@
 # aprs-stats
 
-Author: Adrian S / HB3XVA & Anthropic Claude - v0.3.3
+Author: Adrian S / HB3XVA & Anthropic Claude - v0.4.0
 
 [Changelog](CHANGELOG.md) · Lizenz MIT
 
@@ -25,9 +25,10 @@ Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (B
 | Stationen | Rufzeichen mit fester SSID oder mit *alle SSIDs*. Bei *alle SSIDs* wird jedes Gerät, das sendet, automatisch als eigenes Gerät angelegt. Bezeichnung und Farbe pro Gerät. |
 | Live | Dauerhafte Verbindung zu APRS-IS, Filter aus den eingetragenen Stationen. Neue Stationen sind innert 15 s aktiv. |
 | Import | CSV oder JSON von [aprs.fi/export](https://aprs.fi/export), mehrere Dateien auf einmal. Doppelte Positionen werden übersprungen, auch zwischen Import und Live-Daten. |
-| Karte | Spuren, Punkte, Heatmap, letzte Position. Karten: OpenStreetMap, swisstopo-Landeskarte, swisstopo-Luftbild. |
+| Karte | Spuren, Punkte, Heatmap, letzte Position, besuchte Gemeinden mit Kantonsgrenzen, benannte Orte. Karten: OpenStreetMap, swisstopo-Landeskarte, swisstopo-Luftbild. |
 | Statistik | Kilometer pro Tag/Woche/Monat/Jahr (gestapelt nach Gerät), Aktivität nach Wochentag und Uhrzeit, Geschwindigkeit und Höhe über die Zeit. |
-| Fahrten und Orte | Liste der Fahrten mit Distanz, Dauer und Tempo; Aufenthaltsorte mit Stunden und Anzahl Tage. |
+| Fahrten und Orte | Liste der Fahrten mit Distanz, Dauer und Tempo; Aufenthaltsorte mit Stunden und Anzahl Tage. Orte lassen sich benennen, von Hand oder mit einem Vorschlag von OpenStreetMap; ohne Namen steht die Gemeinde da. |
+| Gemeinden | Besuchte Gemeinden und Kantone aus den amtlichen Grenzen von swisstopo: Kacheln, Kartenebene, Tabellen mit Tagen, km, erstem und letztem Besuch. |
 | Pfade | Digipeater, iGates, Weg ins Netz (Internet, direkt zum iGate, über Digipeater), letzte Rohpakete. |
 | Datenqualität | Falsche GPS-Höhen nach dem Einschalten und Ausreisser werden automatisch verworfen. |
 | Export | CSV der aktuellen Auswahl. |
@@ -72,6 +73,10 @@ Gesendet wird nur mit verifiziertem Login und nur für das Rufzeichen des Logins
 
 **Fahrten und Orte:** Ein Klick auf eine Fahrt zeigt genau diese Fahrt auf der Karte, ein Klick auf einen Ort zoomt dorthin.
 
+**Orte benennen:** In der Orte-Tabelle auf ✎ klicken und einen Namen eingeben, z. B. *Zuhause*. *Vorschlag von OpenStreetMap* fragt [Nominatim](https://nominatim.openstreetmap.org/) nach dem Ort (Gebäude, Geschäft oder Adresse) und trägt den Vorschlag ins Feld ein; er lässt sich vor dem Speichern ändern. Nur dieser Knopf schickt Koordinaten nach aussen. Der Name gilt für alle Orte, deren Mittelpunkt innerhalb des gewählten Radius liegt, also auch in anderen Zeiträumen. Ein leeres Feld oder *Name entfernen* löscht ihn. Auf der Karte zeigt die Ebene *Ortsnamen* alle benannten Orte.
+
+**Gemeinden:** Beim ersten Start lädt aprs-stats die Gemeinde- und Kantonsgrenzen ([swissBOUNDARIES3D](https://www.swisstopo.admin.ch/de/landschaftsmodell-swissboundaries3d), rund 37 MB) im Hintergrund und ordnet jede Position einer Gemeinde zu. Neue Positionen werden laufend zugeordnet. Die Kacheln zeigen, wie viele der 2110 Gemeinden und 26 Kantone die Auswahl besucht hat. Ein Klick darauf öffnet den Tab **Gemeinden**: Kantone mit Fortschrittsbalken (ein Klick filtert die Gemeinden), Gemeinden mit Tagen, km, erstem und letztem Besuch (ein Klick zeigt den Umriss auf der Karte). Auf der Karte färbt die Ebene *Gemeinden* besuchte Gemeinden ein (je kräftiger, desto mehr Tage) und zeigt die Kantonsgrenzen. Swisstopo gibt jedes Jahr eine neue Ausgabe heraus, z. B. nach Gemeindefusionen. *Neuste Ausgabe laden* oben im Tab ersetzt die Grenzen und ordnet alle Positionen neu zu.
+
 ## Konfiguration
 
 Alle Einstellungen stehen in `.env` (Vorlage: [.env.example](.env.example)).
@@ -87,8 +92,13 @@ Alle Einstellungen stehen in `.env` (Vorlage: [.env.example](.env.example)).
 | `TRIP_GAP_MINUTES` | Pause, die eine Fahrt beendet | `20` |
 | `MAX_PLAUSIBLE_KMH` | schnellere Sprünge gelten als GPS-Fehler | `250` |
 | `LOG_LEVEL` | Log-Stufe des Collectors | `INFO` |
+| `BOUNDARIES_AUTOLOAD` | Gemeindegrenzen beim ersten Start automatisch laden; `0` = nur auf Knopfdruck | `1` |
+| `NOMINATIM_URL` | Nominatim-Server für Namensvorschläge | `https://nominatim.openstreetmap.org` |
+| `NOMINATIM_EMAIL` | optionale Kontaktadresse, die bei Nominatim-Anfragen mitgeht | – |
 
 Ohne Bake sendet aprs-stats nichts ins APRS-Netz; für das reine Mitlesen braucht es keinen gültigen Passcode.
+
+Verbindungen nach aussen: APRS-IS (Collector), die Kartenkacheln (Browser), einmal pro Ausgabe der Download der Grenzen von data.geo.admin.ch (nur ein Download, es gehen keine eigenen Daten hinaus) und Nominatim nur beim Klick auf *Vorschlag von OpenStreetMap*.
 
 ## Wie die Auswertungen rechnen
 
@@ -97,6 +107,8 @@ Ohne Bake sendet aprs-stats nichts ins APRS-Netz; für das reine Mitlesen brauch
 - **Orte:** Standpunkte (unter 5 km/h) werden mit DBSCAN gruppiert (Radius wählbar, Standard 150 m, mindestens 4 Punkte). Die Aufenthaltsdauer zählt pro Position höchstens 30 min.
 - **Höhe:** Nach dem Einschalten melden viele Tracker zuerst eine zu tiefe Höhe (z. B. 102 m) und laufen dann über einige Minuten zur echten Höhe hoch. Unterwegs gibt es nach einem kurzen Neustart einzelne Ausreisser. Eine Höhe gilt als plausibel, wenn sie höchstens 30 m plus 12 % der horizontalen Distanz von der letzten plausiblen Höhe abweicht (Strassen sind selten steiler). Beginnt eine Fahrt dort, wo die letzte Fahrt endete, dient deren Höhe als Referenz. Sonst ist die Referenz der Punkt mit der Höhe am nächsten beim Median der Fahrt. Verworfene Höhen fehlen in Grafiken und Kacheln, die Rohwerte bleiben in `altitude_raw` erhalten und erscheinen im Kartenpopup und im CSV-Export. Details: [altitude.py](app/aprs_stats/altitude.py).
 - **Pfade:** APRS-IS dedupliziert. Pro Paket sieht man meist nur den ersten Weg ins Netz, nicht alle Digipeater und iGates, die es gehört haben. Der aprs.fi-Export enthält keine Pfade, Pfadauswertungen gibt es deshalb nur für Live-Daten.
+- **Gemeinden und Kantone:** Jede Position wird dem Hoheitsgebiet zugeordnet, in dem sie liegt (Punkt in Fläche, PostGIS). Gezählt werden die Schweizer Gemeinden. Seen in Kantonsbesitz (z. B. *Zürichsee (ZH)*), Kommunanzen, Liechtenstein, Büsingen und Campione erscheinen in der Liste, zählen aber nicht zu den 2110 Gemeinden. Seen zählen zum Kanton. Die km eines Abschnitts zählen zur Gemeinde, in der er endet. Wer nur durchfährt, ohne dass dort eine Position gesendet wird, hat die Gemeinde nicht besucht. Bei einem langen Sendeintervall fehlen deshalb kleine Gemeinden. Die Karte zeigt vereinfachte Grenzen (20 m), gezählt wird mit den genauen.
+- **Ortsnamen:** Ein Name gilt für einen Ort, wenn dessen Mittelpunkt höchstens den Radius des Namens (beim Speichern der gewählte Radius, mindestens 150 m) oder den aktuell gewählten Radius vom gespeicherten Punkt entfernt liegt. Liegen mehrere Namen in Reichweite, gewinnt der nächste.
 - **Duplikate:** Eine Position gilt als doppelt, wenn dasselbe Gerät zur selben Sekunde schon eine hat oder wenn eine Position aus der anderen Quelle (Import oder live) höchstens 90 s und 50 m entfernt liegt.
 
 ## Aufbau
@@ -124,7 +136,7 @@ APRS-IS (rotate.aprs2.net:14580)        aprs.fi-Export (CSV/JSON)
 | `web` | `aprs-stats-web` | Oberfläche (Leaflet, Leaflet.heat, Chart.js, lokal ausgeliefert) und API |
 | `collector` | `aprs-stats-collector` | APRS-IS-Verbindung, speichert Pakete und Positionen, sendet Baken |
 
-Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate; gesendete Baken mit Quelle `beacon`), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe), `beacons`, `collector_status`, `imports`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
+Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate; gesendete Baken mit Quelle `beacon`), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe, Gebiet), `beacons`, `collector_status`, `imports`, `areas` und `kantone` (Grenzen von swisstopo), `boundaries_meta`, `place_names`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
 
 Code in [app/aprs_stats/](app/aprs_stats/):
 
@@ -133,7 +145,9 @@ Code in [app/aprs_stats/](app/aprs_stats/):
 | `web.py` | API und Auslieferung der Oberfläche |
 | `collector.py` | APRS-IS-Client mit Neuverbindung, Statusmeldung und Senden der Baken |
 | `importer.py` | Einlesen von CSV/JSON, Spaltenerkennung |
-| `stats.py` | SQL für Kilometer, Fahrten, Orte, Aktivität, Pfade |
+| `stats.py` | SQL für Kilometer, Fahrten, Orte, Aktivität, Pfade, Gemeinden und Kantone |
+| `boundaries.py` | Laden der swisstopo-Grenzen (GeoPackage ohne GDAL), Zuordnung der Positionen |
+| `geocode.py` | Namensvorschläge über Nominatim (höchstens 1 Anfrage pro Sekunde) |
 | `altitude.py` | Höhenfilter |
 | `aprs.py` | Rufzeichen, Filter, Pfadzerlegung, Positionspakete für Baken |
 | `store.py` | Speichern mit Duplikaterkennung |
@@ -171,6 +185,7 @@ Sicherungen und Exporte gehören nicht ins Repository; die `.gitignore` schliess
 - Baken werden nur mit verifiziertem Login und nur für das Rufzeichen des Logins gesendet, frühestens alle 10 min. Wer die Oberfläche erreicht, kann aber Baken für dieses Rufzeichen anlegen. Ein weiterer Grund, sie nicht offen ins Internet zu stellen.
 - Die Oberfläche hat **keine Anmeldung**. Sie ist für das Heimnetz gedacht und darf nicht direkt ins Internet. Für den Zugriff von aussen einen Reverse-Proxy mit Anmeldung oder ein VPN davorschalten.
 - Positionsdaten sind persönliche Daten. Exporte und Sicherungen entsprechend aufbewahren.
+- Namensvorschläge schicken die Koordinaten eines Orts an OpenStreetMap Nominatim, z. B. die der Wohnadresse. Das passiert nur beim Klick auf *Vorschlag von OpenStreetMap*. Wer das nicht will, gibt Namen von Hand ein oder setzt `NOMINATIM_URL` auf eine eigene Instanz.
 
 ## Entwicklung
 

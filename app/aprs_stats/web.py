@@ -10,11 +10,12 @@ from typing import Annotated
 
 import psycopg
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import AUTHOR, __version__, db, stats
+from . import AUTHOR, __version__, boundaries, db, geocode, stats
 from .altitude import clean_all, clean_callsign
 from .aprs import MAX_COMMENT_BYTES, full_call, normalize_callsign, normalize_ssid, position_packet, split_full
 from .importer import parse_file
@@ -29,10 +30,12 @@ async def lifespan(_app):
     db.init_schema()
     with db.conn() as c:
         clean_all(c.cursor())
+    boundaries.autoload()
     yield
 
 
 app = FastAPI(title="aprs-stats", version=__version__, lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=2000)
 
 
 # --- Hilfen -----------------------------------------------------------------
@@ -203,8 +206,10 @@ def packets(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
 
 @app.get("/api/stats/summary")
 def stats_summary(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    boundaries.assign()
+    f = make_filter(calls, start, end)
     with db.conn() as c:
-        return stats.summary(c, make_filter(calls, start, end))
+        return {**stats.summary(c, f), "areas": stats.area_counts(c, f)}
 
 
 @app.get("/api/stats/distance")
@@ -239,6 +244,115 @@ def stats_places(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
         return stats.places(c, make_filter(calls, start, end), eps_m=eps)
 
 
+@app.get("/api/stats/gemeinden")
+def stats_gemeinden(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    boundaries.assign()
+    f = make_filter(calls, start, end)
+    with db.conn() as c:
+        return {"status": boundaries.status(), "counts": stats.area_counts(c, f),
+                "kantone": stats.kantone(c, f), "gemeinden": stats.gemeinden(c, f)}
+
+
+@app.get("/api/areas/gemeinden.geojson")
+def areas_gemeinden(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
+    boundaries.assign()
+    with db.conn() as c:
+        return stats.gemeinden_geojson(c, make_filter(calls, start, end))
+
+
+@app.get("/api/areas/kantone.geojson")
+def areas_kantone():
+    with db.conn() as c:
+        return stats.kantone_geojson(c)
+
+
+@app.get("/api/areas/status")
+def areas_status():
+    return boundaries.status()
+
+
+@app.post("/api/areas/load", status_code=202)
+def areas_load():
+    """swissBOUNDARIES3D (neuste Ausgabe) im Hintergrund laden bzw. aktualisieren."""
+    if not boundaries.start_load():
+        raise HTTPException(409, "Die Grenzen werden schon geladen")
+    return boundaries.status()
+
+
+# --- Ortsnamen --------------------------------------------------------------
+
+class PlaceNameIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    radius_m: float = Field(150, ge=20, le=2000)
+    source: str = Field("manual", pattern="^(manual|nominatim)$")
+
+
+class PlaceNamePatch(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    source: str = Field("manual", pattern="^(manual|nominatim)$")
+
+
+@app.get("/api/places")
+def list_place_names():
+    with db.conn() as c:
+        return c.execute(
+            """SELECT n.id, n.name, n.lat, n.lon, n.radius_m, n.source, n.created_at, n.updated_at,
+                      a.name AS gemeinde, k.abbr AS kanton
+               FROM place_names n
+               LEFT JOIN LATERAL (SELECT name, kanton_nr FROM areas WHERE ST_Intersects(geom, n.geom)
+                                  ORDER BY (kind = 'Gemeindegebiet') DESC LIMIT 1) a ON true
+               LEFT JOIN kantone k ON k.nr = a.kanton_nr
+               ORDER BY n.name"""
+        ).fetchall()
+
+
+@app.post("/api/places", status_code=201)
+def add_place_name(p: PlaceNameIn):
+    with db.conn() as c:
+        return c.execute(
+            """INSERT INTO place_names (name, lat, lon, geom, radius_m, source)
+               VALUES (%(name)s, %(lat)s, %(lon)s, ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326),
+                       %(radius_m)s, %(source)s)
+               RETURNING id, name, lat, lon, radius_m, source""",
+            {**p.model_dump(), "name": p.name.strip()},
+        ).fetchone()
+
+
+@app.patch("/api/places/{pid}")
+def rename_place(pid: int, p: PlaceNamePatch):
+    with db.conn() as c:
+        row = c.execute(
+            """UPDATE place_names SET name = %s, source = %s, updated_at = now() WHERE id = %s
+               RETURNING id, name, lat, lon, radius_m, source""",
+            (p.name.strip(), p.source, pid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Ort nicht gefunden")
+    return row
+
+
+@app.delete("/api/places/{pid}")
+def delete_place_name(pid: int):
+    with db.conn() as c:
+        row = c.execute("DELETE FROM place_names WHERE id = %s RETURNING id, name", (pid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Ort nicht gefunden")
+    return {"deleted": row}
+
+
+@app.get("/api/geocode/reverse")
+def reverse_geocode(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180)):
+    """Namensvorschlag von OpenStreetMap Nominatim. Schickt die Koordinaten an Nominatim."""
+    try:
+        return geocode.reverse(lat, lon)
+    except LookupError as e:
+        raise HTTPException(404, f"Nominatim kennt hier keinen Ort ({e})")
+    except OSError as e:
+        raise HTTPException(502, f"Nominatim nicht erreichbar: {e}")
+
+
 @app.get("/api/stats/paths")
 def stats_paths(calls: CallsQ = None, start: StartQ = None, end: EndQ = None):
     with db.conn() as c:
@@ -258,7 +372,8 @@ def status():
                       pg_size_pretty(pg_database_size(current_database())) AS db_size"""
         ).fetchone()
         imports = c.execute("SELECT * FROM imports ORDER BY imported_at DESC LIMIT 20").fetchall()
-    return {"version": __version__, "collector": col, "counts": counts, "imports": imports}
+    return {"version": __version__, "collector": col, "counts": counts, "imports": imports,
+            "boundaries": boundaries.status()}
 
 
 # --- Import / Export --------------------------------------------------------

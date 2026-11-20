@@ -1,2 +1,2 @@
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 AUTHOR = "Adrian S / HB3XVA & Anthropic Claude"

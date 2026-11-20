@@ -37,7 +37,7 @@ def _segments_cte(where: str) -> str:
     plus `km_ok` (plausible Fahrstrecke) und `trip` (Fahrtnummer)."""
     return f"""
     WITH p AS (
-        SELECT callsign, ts, geom, speed_kmh,
+        SELECT callsign, ts, geom, speed_kmh, area,
                lag(ts)   OVER w AS pts,
                lag(geom) OVER w AS pgeom
         FROM positions WHERE {where}
@@ -157,18 +157,36 @@ def places(c, f: Filter, eps_m: float = 150, min_points: int = 4, limit: int = 5
                                        minpoints := %(minpts)s) OVER () AS cid
             FROM s
         )
-        SELECT cid, count(*) AS points,
-               ST_Y(ST_Centroid(ST_Collect(geom))) AS lat,
-               ST_X(ST_Centroid(ST_Collect(geom))) AS lon,
-               min(ts) AS first, max(ts) AS last,
-               count(DISTINCT (ts AT TIME ZONE %(tz)s)::date) AS days,
-               round((sum(LEAST(coalesce(EXTRACT(EPOCH FROM nts - ts), 0), 1800)) / 3600.0)::numeric, 1)::float
-                   AS hours,
-               array_agg(DISTINCT callsign) AS callsigns
-        FROM cl WHERE cid IS NOT NULL
-        GROUP BY cid ORDER BY hours DESC, points DESC LIMIT %(limit)s
+        , pl AS (
+            SELECT cid, count(*) AS points,
+                   ST_Y(ST_Centroid(ST_Collect(geom))) AS lat,
+                   ST_X(ST_Centroid(ST_Collect(geom))) AS lon,
+                   min(ts) AS first, max(ts) AS last,
+                   count(DISTINCT (ts AT TIME ZONE %(tz)s)::date) AS days,
+                   round((sum(LEAST(coalesce(EXTRACT(EPOCH FROM nts - ts), 0), 1800)) / 3600.0)::numeric, 1)::float
+                       AS hours,
+                   array_agg(DISTINCT callsign) AS callsigns
+            FROM cl WHERE cid IS NOT NULL
+            GROUP BY cid ORDER BY hours DESC, points DESC LIMIT %(limit)s
+        )
+        SELECT pl.*, n.id AS name_id, n.name, n.source AS name_source,
+               a.name AS gemeinde, k.abbr AS kanton
+        FROM pl
+        LEFT JOIN LATERAL (
+            SELECT n.id, n.name, n.source,
+                   ST_Distance(n.geom::geography, ST_SetSRID(ST_MakePoint(pl.lon, pl.lat), 4326)::geography) AS d
+            FROM place_names n
+            WHERE ST_DWithin(n.geom::geography, ST_SetSRID(ST_MakePoint(pl.lon, pl.lat), 4326)::geography,
+                             greatest(n.radius_m, %(eps_m)s))
+            ORDER BY d LIMIT 1) n ON true
+        LEFT JOIN LATERAL (
+            SELECT name, kanton_nr FROM areas
+            WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(pl.lon, pl.lat), 4326))
+            ORDER BY (kind = 'Gemeindegebiet') DESC LIMIT 1) a ON true
+        LEFT JOIN kantone k ON k.nr = a.kanton_nr
+        ORDER BY pl.hours DESC, pl.points DESC
         """,
-        {**params, "eps": eps, "minpts": min_points, "tz": TZ, "limit": limit},
+        {**params, "eps": eps, "eps_m": eps_m, "minpts": min_points, "tz": TZ, "limit": limit},
     ).fetchall()
 
 
@@ -202,3 +220,96 @@ def paths(c, f: Filter) -> dict:
         params,
     ).fetchall()
     return {"digis": digis, "igates": igates, "routes": routes, "formats": formats}
+
+
+# --- Gemeinden und Kantone (Grenzen aus boundaries.py) ------------------------
+
+def area_counts(c, f: Filter) -> dict:
+    """Anzahl besuchter Gemeinden (nur Schweizer Gemeindegebiet) und Kantone."""
+    where, params = f.where("p.ts", "p.callsign")
+    return c.execute(
+        f"""SELECT count(DISTINCT a.id) FILTER (WHERE a.kind = 'Gemeindegebiet' AND a.country = 'CH') AS gemeinden,
+                   count(DISTINCT a.kanton_nr) AS kantone,
+                   (SELECT count(*) FROM areas WHERE kind = 'Gemeindegebiet' AND country = 'CH') AS gemeinden_total,
+                   (SELECT count(*) FROM kantone) AS kantone_total
+            FROM positions p JOIN areas a ON a.id = p.area WHERE {where}""",
+        params,
+    ).fetchone()
+
+
+def _area_visits_cte(where: str) -> str:
+    return _segments_cte(where) + f""",
+    v AS (
+        SELECT area, min(ts) AS first, max(ts) AS last, count(*) AS points,
+               count(DISTINCT (ts AT TIME ZONE %(tz)s)::date) AS days,
+               round(sum(km_ok)::numeric, 1)::float AS km,
+               array_agg(DISTINCT callsign) AS callsigns
+        FROM seg WHERE area > 0 GROUP BY area
+    )
+    """
+
+
+def gemeinden(c, f: Filter) -> list[dict]:
+    """Besuchte Gebiete (Gemeinden, Seen, Kommunanzen) mit Besuchen; km zählen zum Gebiet des Endpunkts."""
+    where, params = f.where()
+    return c.execute(
+        _area_visits_cte(where)
+        + """SELECT a.id, a.bfs_nr, a.name, a.kind, a.country, a.kanton_nr, k.abbr AS kanton,
+                    v.first, v.last, v.points, v.days, v.km, v.callsigns,
+                    ST_XMin(b) AS west, ST_YMin(b) AS south, ST_XMax(b) AS east, ST_YMax(b) AS north
+             FROM v JOIN areas a ON a.id = v.area
+             LEFT JOIN kantone k ON k.nr = a.kanton_nr,
+             LATERAL (SELECT ST_Envelope(a.geom_s) AS b) e
+             ORDER BY v.days DESC, v.points DESC""",
+        {**params, "tz": TZ},
+    ).fetchall()
+
+
+def kantone(c, f: Filter) -> list[dict]:
+    """Alle Kantone mit Anzahl besuchter Gemeinden; unbesuchte mit points = 0."""
+    where, params = f.where()
+    return c.execute(
+        _area_visits_cte(where)
+        + """, kv AS (
+                SELECT a.kanton_nr AS nr,
+                       count(*) FILTER (WHERE a.kind = 'Gemeindegebiet') AS gemeinden,
+                       min(v.first) AS first, max(v.last) AS last, sum(v.points) AS points,
+                       round(sum(v.km)::numeric, 1)::float AS km
+                FROM v JOIN areas a ON a.id = v.area WHERE a.kanton_nr IS NOT NULL GROUP BY 1
+             ), kt AS (
+                SELECT kanton_nr AS nr, count(*) AS total FROM areas
+                WHERE kind = 'Gemeindegebiet' AND country = 'CH' GROUP BY 1
+             )
+             SELECT k.nr, k.abbr, k.name, coalesce(kv.gemeinden, 0) AS gemeinden, coalesce(kt.total, 0) AS total,
+                    kv.first, kv.last, coalesce(kv.points, 0) AS points, coalesce(kv.km, 0) AS km
+             FROM kantone k LEFT JOIN kv ON kv.nr = k.nr LEFT JOIN kt ON kt.nr = k.nr
+             ORDER BY coalesce(kv.points, 0) = 0, kv.last DESC NULLS LAST, k.nr""",
+        {**params, "tz": TZ},
+    ).fetchall()
+
+
+def gemeinden_geojson(c, f: Filter) -> dict:
+    """Besuchte Gebiete als GeoJSON (vereinfachte Grenzen) für die Karte."""
+    where, params = f.where()
+    row = c.execute(
+        _area_visits_cte(where)
+        + """SELECT json_build_object('type', 'FeatureCollection', 'features', coalesce(json_agg(json_build_object(
+                    'type', 'Feature',
+                    'geometry', ST_AsGeoJSON(a.geom_s, 5)::json,
+                    'properties', json_build_object('id', a.id, 'name', a.name, 'kind', a.kind,
+                        'kanton', k.abbr, 'days', v.days, 'points', v.points, 'km', v.km,
+                        'first', v.first, 'last', v.last)
+                 )), '[]'::json)) AS fc
+             FROM v JOIN areas a ON a.id = v.area LEFT JOIN kantone k ON k.nr = a.kanton_nr""",
+        {**params, "tz": TZ},
+    ).fetchone()
+    return row["fc"]
+
+
+def kantone_geojson(c) -> dict:
+    return c.execute(
+        """SELECT json_build_object('type', 'FeatureCollection', 'features', coalesce(json_agg(json_build_object(
+                'type', 'Feature', 'geometry', ST_AsGeoJSON(ST_Boundary(geom_s), 4)::json,
+                'properties', json_build_object('nr', nr, 'abbr', abbr, 'name', name))), '[]'::json)) AS fc
+           FROM kantone"""
+    ).fetchone()["fc"]

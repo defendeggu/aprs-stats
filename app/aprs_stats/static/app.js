@@ -34,6 +34,8 @@ function selectOnly(calls) { state.all = false; state.selected = new Set(calls);
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+/* "Eschenbach (LU)" trägt den Kanton schon im Namen */
+function areaName(name, kanton) { return !kanton || name.endsWith(`(${kanton})`) ? name : `${name} (${kanton})`; }
 function dt(v) { return v ? fmtDT.format(new Date(v)) : "–"; }
 function dur(sec) { const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return h ? `${h} h ${m} min` : `${m} min`; }
 function ago(v) {
@@ -195,8 +197,17 @@ async function loadSummary() {
     [s.first ? fmtD.format(new Date(s.first)) : "–", "erste Position"],
     [s.last ? ago(s.last) : "–", "letzte Position"],
   ];
-  $("#tiles").innerHTML = tiles.map(([v, k]) => `<div class="tile"><div class="v" title="${esc(v)}">${esc(v)}</div><div class="k">${k}</div></div>`).join("");
+  const a = s.areas || {};
+  if (a.gemeinden_total) {
+    tiles.push([fmtInt.format(a.gemeinden), `Gemeinden (von ${fmtInt.format(a.gemeinden_total)})`, "areas"],
+               [fmtInt.format(a.kantone), `Kantone (von ${a.kantone_total})`, "areas"]);
+  }
+  $("#tiles").innerHTML = tiles.map(([v, k, tab]) => `<div class="tile${tab ? " link-tile" : ""}"${tab ? ` data-tab="${tab}" title="Zum Tab Gemeinden"` : ""}>
+    <div class="v" title="${esc(v)}">${esc(v)}</div><div class="k">${esc(k)}</div></div>`).join("");
 }
+$("#tiles").addEventListener("click", e => {
+  const t = e.target.closest(".tile[data-tab]"); if (t) showTab(t.dataset.tab);
+});
 
 /* ---------- Karte ---------- */
 const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -219,8 +230,10 @@ const renderer = L.canvas({ padding: 0.3 });
 const layers = {
   tracks: L.layerGroup(), points: L.layerGroup(), heat: L.heatLayer([], { radius: 14, blur: 18, minOpacity: 0.3 }),
   latest: L.layerGroup(), highlight: L.layerGroup().addTo(map),
+  areas: L.layerGroup(), places: L.layerGroup(),
 };
-const layerBoxes = { tracks: "#lay-tracks", points: "#lay-points", heat: "#lay-heat", latest: "#lay-latest" };
+const layerBoxes = { tracks: "#lay-tracks", points: "#lay-points", heat: "#lay-heat", latest: "#lay-latest",
+                     areas: "#lay-areas", places: "#lay-places" };
 for (const [k, sel] of Object.entries(layerBoxes)) {
   const saved = load("layer-" + k, null);
   if (saved !== null) $(sel).checked = saved;
@@ -228,6 +241,8 @@ for (const [k, sel] of Object.entries(layerBoxes)) {
   $(sel).addEventListener("change", e => {
     save("layer-" + k, e.target.checked);
     e.target.checked ? layers[k].addTo(map) : map.removeLayer(layers[k]);
+    // Gemeinden liegen unter den Spuren: beim Einschalten alles neu zeichnen
+    if ((k === "areas" || k === "places") && e.target.checked) loadMap().catch(console.error);
   });
 }
 
@@ -243,9 +258,19 @@ function popupFor(r) {
     <span class="muted">Quelle: ${src === "import" ? "Import" : "APRS-IS"}</span>`;
 }
 
+let kantoneGeo = null;
 async function loadMap() {
-  const data = await api("positions?" + query());
-  for (const k of ["tracks", "points", "latest"]) layers[k].clearLayers();
+  const withAreas = $("#lay-areas").checked, withPlaces = $("#lay-places").checked;
+  const [data, gem, kt, places] = await Promise.all([
+    api("positions?" + query()),
+    withAreas ? api("areas/gemeinden.geojson?" + query()).catch(() => null) : null,
+    withAreas && !kantoneGeo ? api("areas/kantone.geojson").catch(() => null) : kantoneGeo,
+    withPlaces ? api("places").catch(() => []) : [],
+  ]);
+  if (kt && kt.features && kt.features.length) kantoneGeo = kt;
+  for (const k of ["areas", "tracks", "points", "latest", "places"]) layers[k].clearLayers();
+  if (withAreas) drawAreas(gem, kantoneGeo);
+  drawPlaceNames(places);
   const rows = data.rows;
   const heat = [];
   let line = [], prev = null;
@@ -302,11 +327,48 @@ async function loadLatest() {
   }
 }
 
-function highlight(latlngs, isPoint) {
+function highlight(latlngs, isPoint, radius = 150) {
   layers.highlight.clearLayers();
   if (isPoint) {
-    L.circle(latlngs, { radius: 150, color: "#f59e0b", weight: 3, fillOpacity: 0.15 }).addTo(layers.highlight);
-    map.setView(latlngs, 16);
+    L.circle(latlngs, { radius, color: "#f59e0b", weight: 3, fillOpacity: 0.15 }).addTo(layers.highlight);
+    map.setView(latlngs, radius > 400 ? 14 : 16);
+  }
+}
+
+/* Besuchte Gemeinden: Fläche nach Anzahl Tage, Kantonsgrenzen als Linien (unter den Spuren) */
+function areaPopup(p) {
+  return `<b>${esc(areaName(p.name, p.kanton))}</b>${p.kind !== "Gemeindegebiet" ? ` <span class="muted">· ${esc(p.kind)}</span>` : ""}<br>
+    ${fmtInt.format(p.days)} ${p.days === 1 ? "Tag" : "Tage"} · ${fmtNum.format(p.km || 0)} km · ${fmtInt.format(p.points)} Positionen<br>
+    erster Besuch: ${dt(p.first)}<br>letzter Besuch: ${dt(p.last)}`;
+}
+function drawAreas(gem, kt) {
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  if (gem && gem.features.length) {
+    const max = Math.max(...gem.features.map(f => f.properties.days));
+    L.geoJSON(gem, {
+      renderer,
+      style: f => ({ color: accent, weight: 1, opacity: 0.7, fillColor: accent,
+                     fillOpacity: 0.12 + 0.33 * Math.sqrt(f.properties.days / max) }),
+      onEachFeature: (f, l) => l.bindPopup(() => areaPopup(f.properties)).bindTooltip(esc(f.properties.name), { sticky: true }),
+    }).addTo(layers.areas);
+    // Umriss der gewählten Gemeinde erst nach allen Flächen zeichnen, sonst liegt er darunter
+    const focus = gem.features.find(f => f.properties.id === state.focusArea);
+    if (focus) {
+      L.geoJSON(focus, { renderer, interactive: false, style: { color: "#f59e0b", weight: 3.5, fill: false } }).addTo(layers.highlight);
+      state.focusArea = null;
+    }
+  }
+  if (kt) L.geoJSON(kt, { renderer, interactive: false, style: { color: "#64748b", weight: 1.6, opacity: 0.8, dashArray: "6 4" } }).addTo(layers.areas);
+}
+
+/* Benannte Orte */
+function drawPlaceNames(list) {
+  for (const p of list || []) {
+    L.circleMarker([p.lat, p.lon], { radius: 5, color: "#fff", weight: 1.5, fillColor: "#d97706", fillOpacity: 1, renderer })
+      .bindTooltip(esc(p.name), { permanent: true, direction: "right", offset: [8, 0], className: "place-label" })
+      .bindPopup(`<b>${esc(p.name)}</b><br>${p.gemeinde ? `${esc(areaName(p.gemeinde, p.kanton))}<br>` : ""}
+        <span class="muted">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} · ${p.source === "nominatim" ? "Name von OpenStreetMap" : "eigener Name"}</span>`)
+      .addTo(layers.places);
   }
 }
 
@@ -423,19 +485,148 @@ async function loadTrips() {
     refresh();
   };
 
-  $("#places-table").innerHTML = places.length ? `<thead><tr><th>#</th><th class="num">Stunden</th><th class="num">Tage</th><th>zuletzt</th><th>Geräte</th><th>Koordinaten</th></tr></thead><tbody>` +
-    places.map((p, i) => `<tr class="click" data-i="${i}"><td>${i + 1}</td><td class="num">${fmtNum.format(p.hours)}</td>
+  const eps = parseFloat($("#eps").value);
+  $("#places-table").innerHTML = places.length ? `<thead><tr><th>#</th><th>Name</th><th class="num">Stunden</th><th class="num">Tage</th><th>zuletzt</th><th>Geräte</th><th>Koordinaten</th></tr></thead><tbody>` +
+    places.map((p, i) => `<tr class="click" data-i="${i}"><td>${i + 1}</td>
+      <td>${placeNameHtml(p)} <button class="edit-btn" data-edit="${i}" title="Ort benennen" aria-label="Ort benennen">✎</button></td>
+      <td class="num">${fmtNum.format(p.hours)}</td>
       <td class="num">${p.days}</td><td>${dt(p.last)}</td><td>${esc(p.callsigns.join(", "))}</td>
       <td class="mono">${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}</td></tr>`).join("") + "</tbody>"
     : `<tbody><tr><td class="muted">Keine Aufenthaltsorte gefunden.</td></tr></tbody>`;
   $("#places-table").onclick = e => {
+    const ed = e.target.closest("[data-edit]");
+    if (ed) return openPlaceDialog({ ...places[ed.dataset.edit], eps });
     const tr = e.target.closest("tr[data-i]"); if (!tr) return;
     const p = places[tr.dataset.i];
     showTab("map");
-    setTimeout(() => highlight([p.lat, p.lon], true), 50);
+    setTimeout(() => highlight([p.lat, p.lon], true, Math.max(150, eps)), 50);
   };
 }
 $("#eps").addEventListener("change", loadTrips);
+
+function placeNameHtml(p) {
+  const area = p.gemeinde ? areaName(p.gemeinde, p.kanton) : "";
+  if (p.name) return `<span class="place-name" title="${esc(p.name_source === "nominatim" ? "Name von OpenStreetMap" : "eigener Name")}${area ? " · " + esc(area) : ""}">${esc(p.name)}</span>`;
+  return area ? `<span class="muted">${esc(area)}</span>` : `<span class="muted">–</span>`;
+}
+
+/* ---------- Ort benennen ---------- */
+const placeDlg = $("#place-dialog"), placeForm = $("#place-form");
+let placeCur = null, osmSuggestion = null;
+function openPlaceDialog(p) {
+  placeCur = p; osmSuggestion = null;
+  placeForm.name.value = p.name || "";
+  $("#place-info").textContent = `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}` +
+    (p.gemeinde ? ` · ${areaName(p.gemeinde, p.kanton)}` : "") +
+    ` · ${fmtNum.format(p.hours)} h an ${p.days} ${p.days === 1 ? "Tag" : "Tagen"}`;
+  $("#place-osm-msg").textContent = ""; $("#place-msg").textContent = "";
+  $("#place-delete").hidden = !p.name_id;
+  placeDlg.showModal();
+  placeForm.name.focus();
+}
+$("#place-cancel").onclick = () => placeDlg.close();
+$("#place-osm").onclick = async () => {
+  const msg = $("#place-osm-msg"), btn = $("#place-osm");
+  btn.disabled = true; msg.className = "muted small"; msg.textContent = "frage OpenStreetMap …";
+  try {
+    const r = await api(`geocode/reverse?lat=${placeCur.lat}&lon=${placeCur.lon}`);
+    osmSuggestion = r.suggestion;
+    placeForm.name.value = r.suggestion;
+    msg.textContent = `${r.display_name || ""} · ${r.attribution}`;
+  } catch (err) { msg.className = "small err"; msg.textContent = err.message; }
+  btn.disabled = false;
+};
+placeForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const name = placeForm.name.value.trim(), p = placeCur;
+  const source = osmSuggestion && name === osmSuggestion ? "nominatim" : "manual";
+  const json = body => ({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  try {
+    if (!name && p.name_id) await api(`places/${p.name_id}`, { method: "DELETE" });
+    else if (!name) { placeDlg.close(); return; }
+    else if (p.name_id) await api(`places/${p.name_id}`, { method: "PATCH", ...json({ name, source }) });
+    else await api("places", { method: "POST", ...json({ name, source, lat: p.lat, lon: p.lon, radius_m: Math.max(150, p.eps || 150) }) });
+    placeDlg.close();
+    loadTrips().catch(console.error);
+  } catch (err) { $("#place-msg").className = "msg err"; $("#place-msg").textContent = err.message; }
+});
+$("#place-delete").onclick = async () => {
+  if (!placeCur.name_id || !confirm(`Name „${placeCur.name}“ entfernen?`)) return;
+  try { await api(`places/${placeCur.name_id}`, { method: "DELETE" }); placeDlg.close(); loadTrips().catch(console.error); }
+  catch (err) { $("#place-msg").className = "msg err"; $("#place-msg").textContent = err.message; }
+};
+
+/* ---------- Gemeinden & Kantone ---------- */
+let areaData = null, areaPoll = null;
+async function loadAreas() {
+  areaData = await api("stats/gemeinden?" + query());
+  renderAreaNotice(areaData.status);
+  const kt = areaData.kantone;
+  $("#kantone-table").innerHTML = kt.length
+    ? `<thead><tr><th>Kanton</th><th>Gemeinden</th><th class="num">km</th><th>zuletzt</th></tr></thead><tbody>` +
+      kt.map(k => `<tr class="${k.points ? "click" : "unvisited"}" data-abbr="${esc(k.abbr)}">
+        <td><b>${esc(k.abbr)}</b> ${esc(k.name)}</td>
+        <td><span class="bar"><span style="width:${k.total ? Math.round(100 * k.gemeinden / k.total) : 0}%"></span></span>${k.gemeinden} / ${k.total}</td>
+        <td class="num">${k.points ? fmtNum.format(k.km) : ""}</td><td>${k.last ? dt(k.last) : ""}</td></tr>`).join("") + "</tbody>"
+    : `<tbody><tr><td class="muted">Noch keine Grenzen geladen.</td></tr></tbody>`;
+  renderGemeinden();
+}
+function renderGemeinden() {
+  const q = $("#gem-search").value.trim().toLowerCase();
+  const all = areaData ? areaData.gemeinden : [];
+  const rows = all.filter(g => !q || g.name.toLowerCase().includes(q) || (g.kanton || "").toLowerCase() === q);
+  $("#gemeinden-table").innerHTML = rows.length
+    ? `<thead><tr><th>Gemeinde</th><th>Kanton</th><th class="num">Tage</th><th class="num">km</th><th>erster Besuch</th><th>letzter Besuch</th><th>Geräte</th></tr></thead><tbody>` +
+      rows.map(g => `<tr class="click" data-id="${g.id}">
+        <td><b>${esc(g.name)}</b>${g.kind !== "Gemeindegebiet" ? ` <span class="muted small">${esc(g.kind === "Kantonsgebiet" ? "Kantonsgebiet" : g.kind)}</span>` : ""}${g.country !== "CH" ? ` <span class="muted small">${esc(g.country)}</span>` : ""}</td>
+        <td>${esc(g.kanton || "")}</td><td class="num">${g.days}</td><td class="num">${fmtNum.format(g.km || 0)}</td>
+        <td>${dt(g.first)}</td><td>${dt(g.last)}</td><td>${esc(g.callsigns.join(", "))}</td></tr>`).join("") + "</tbody>"
+    : `<tbody><tr><td class="muted">${all.length ? "Keine Gemeinde gefunden." : "Keine besuchten Gemeinden in der Auswahl."}</td></tr></tbody>`;
+}
+$("#gem-search").addEventListener("input", renderGemeinden);
+$("#kantone-table").addEventListener("click", e => {
+  const tr = e.target.closest("tr.click[data-abbr]"); if (!tr) return;
+  const s = $("#gem-search");
+  s.value = s.value.toLowerCase() === tr.dataset.abbr.toLowerCase() ? "" : tr.dataset.abbr;
+  renderGemeinden();
+});
+$("#gemeinden-table").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const g = areaData.gemeinden.find(x => String(x.id) === tr.dataset.id);
+  if (!$("#lay-areas").checked) { $("#lay-areas").checked = true; save("layer-areas", true); layers.areas.addTo(map); }
+  state.fitNext = false;
+  layers.highlight.clearLayers();
+  state.focusArea = g.id;                                         // Umriss zeichnet drawAreas()
+  showTab("map");
+  setTimeout(() => map.fitBounds([[g.south, g.west], [g.north, g.east]], { padding: [30, 30] }), 50);
+});
+function renderAreaNotice(st) {
+  const n = $("#areas-notice");
+  clearTimeout(areaPoll);
+  const loadBtn = label => `<button class="btn" id="areas-load">${label}</button>`;
+  if (st.running || st.state === "loading") {
+    n.hidden = false; n.className = "notice";
+    n.innerHTML = `<b>Grenzen werden geladen …</b> ${esc(st.message || "")}`;
+    areaPoll = setTimeout(() => { if (state.tab === "areas") loadAreas().catch(console.error); }, 3000);
+  } else if (st.state !== "ready") {
+    n.hidden = false; n.className = "notice";
+    n.innerHTML = `<b>Noch keine Gemeindegrenzen.</b> ${esc(st.message || "")}
+      Geladen wird swissBOUNDARIES3D von swisstopo (rund 37 MB, einmalig). ${loadBtn("Grenzen laden")}`;
+  } else {
+    n.hidden = !st.message;
+    n.className = "notice"; n.innerHTML = esc(st.message || "");
+  }
+  $("#areas-source").innerHTML = st.state === "ready" && st.version
+    ? `Grenzen: <a href="https://www.swisstopo.admin.ch/de/landschaftsmodell-swissboundaries3d" target="_blank" rel="noopener">swissBOUNDARIES3D</a>
+       Ausgabe ${esc(st.version)} © swisstopo, geladen ${dt(st.loaded_at)}. ${loadBtn("Neuste Ausgabe laden")}`
+    : "";
+  for (const b of $$("#areas-load")) b.onclick = async () => {
+    b.disabled = true;
+    try { await api("areas/load", { method: "POST" }); } catch (err) { alert(err.message); }
+    kantoneGeo = null;
+    loadAreas().catch(console.error);
+  };
+}
 function toDateInput(d) { const z = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
 
 /* ---------- Pfade ---------- */
@@ -604,6 +795,7 @@ async function loadStatus() {
     <dt>Stationen</dt><dd>${fmtInt.format(s.counts.stations)}</dd>
     <dt>Höhen verworfen</dt><dd>${fmtInt.format(s.counts.altitude_filtered)} <span class="muted small">(GPS-Kaltstart und Ausreisser)</span></dd>
     <dt>Grösse</dt><dd>${esc(s.counts.db_size)}</dd>
+    <dt>Gemeindegrenzen</dt><dd>${s.boundaries && s.boundaries.version ? `swissBOUNDARIES3D ${esc(s.boundaries.version)} (${fmtInt.format(s.boundaries.gemeinden)} Gemeinden)` : esc((s.boundaries && s.boundaries.message) || "nicht geladen")}</dd>
     <dt>Version</dt><dd>${esc(s.version)}</dd>`;
   $("#imports-table").innerHTML = s.imports.length
     ? `<thead><tr><th>Zeit</th><th>Datei</th><th>Rufzeichen</th><th class="num">Zeilen</th><th class="num">neu</th><th class="num">doppelt</th><th class="num">Fehler</th></tr></thead><tbody>` +
@@ -886,6 +1078,7 @@ async function refreshTab() {
     if (state.tab === "map") await loadMap();
     else if (state.tab === "charts") await loadCharts();
     else if (state.tab === "trips") await loadTrips();
+    else if (state.tab === "areas") await loadAreas();
     else if (state.tab === "paths") await loadPaths();
     else if (state.tab === "stations") await loadStations();
     else if (state.tab === "status") await loadStatus();

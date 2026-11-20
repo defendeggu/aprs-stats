@@ -3,6 +3,26 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.4.0] – 2026-11-20
+
+### Neu
+- **Besuchte Gemeinden und Kantone** aus den amtlichen Grenzen von swisstopo (swissBOUNDARIES3D).
+  Die Grenzen werden beim ersten Start automatisch geladen (abschaltbar mit `BOUNDARIES_AUTOLOAD=0`),
+  jede Position wird ihrer Gemeinde zugeordnet.
+  - Kacheln „Gemeinden (von 2110)“ und „Kantone (von 26)“ für die aktuelle Auswahl.
+  - Neuer Tab **Gemeinden**: Kantone mit Fortschritt, Gemeinden mit Tagen, km, erstem und letztem Besuch, Suche.
+  - Kartenebene **Gemeinden**: besuchte Gemeinden eingefärbt (nach Anzahl Tage), Kantonsgrenzen.
+  - *Neuste Ausgabe laden* aktualisiert die Grenzen, z. B. nach Gemeindefusionen.
+- **Namen für Orte**: In der Orte-Tabelle mit ✎ benennen, von Hand oder mit einem Vorschlag von
+  OpenStreetMap Nominatim (nur auf Knopfdruck). Ohne Namen zeigt die Tabelle die Gemeinde.
+  Kartenebene **Ortsnamen**.
+- API: `/api/stats/gemeinden`, `/api/areas/gemeinden.geojson`, `/api/areas/kantone.geojson`,
+  `/api/areas/status`, `/api/areas/load`, `/api/places`, `/api/geocode/reverse`.
+- Status-Tab zeigt die Ausgabe der Gemeindegrenzen.
+
+### Geändert
+- API-Antworten werden komprimiert (gzip), wenn der Browser es unterstützt.
+
 ## [0.3.3] – 2026-11-19
 
 ### Behoben
