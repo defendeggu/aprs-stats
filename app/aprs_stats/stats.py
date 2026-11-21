@@ -121,20 +121,64 @@ def timeline(c, f: Filter, limit: int = 5000) -> list[dict]:
     ).fetchall()
 
 
+def place_label(name: str | None, gemeinde: str | None, kanton: str | None) -> str | None:
+    """Anzeigename eines Punkts: eigener Ortsname, sonst Gemeinde mit Kanton ("Luzern (LU)").
+    Trägt die Gemeinde den Kanton schon im Namen ("Eschenbach (LU)"), wird er nicht wiederholt."""
+    if name:
+        return name
+    if not gemeinde:
+        return None
+    if not kanton or gemeinde.endswith(f"({kanton})"):
+        return gemeinde
+    return f"{gemeinde} ({kanton})"
+
+
+# Nächster benannter Ort im Radius (mindestens 150 m) und Gemeinde eines Punkts
+_ENDPOINT_SQL = """
+    LEFT JOIN LATERAL (
+        SELECT n.name FROM place_names n
+        WHERE ST_DWithin(n.geom::geography, t.{g}::geography, greatest(n.radius_m, 150))
+        ORDER BY ST_Distance(n.geom::geography, t.{g}::geography) LIMIT 1) {p}n ON true
+    LEFT JOIN areas {p}a ON {p}a.id = t.{a}
+    LEFT JOIN kantone {p}k ON {p}k.nr = {p}a.kanton_nr
+"""
+
+
 def trips(c, f: Filter, min_km: float = 1.0, limit: int = 300) -> list[dict]:
+    """Fahrten mit Start- und Zielort. Start ist die erste Position der Fahrt (meist noch im Stand),
+    Ziel die letzte Position mit Bewegung."""
     where, params = f.where()
-    return c.execute(
+    rows = c.execute(
         _segments_cte(where)
-        + """SELECT callsign, min(ts) AS start,
-                    max(ts) FILTER (WHERE km_ok > 0) AS "end",
-                    round(sum(km_ok)::numeric, 2)::float AS km, count(*) AS points,
-                    max(speed_kmh) AS max_speed,
-                    EXTRACT(EPOCH FROM max(ts) FILTER (WHERE km_ok > 0) - min(ts))::int AS seconds
-             FROM seg GROUP BY callsign, trip
-             HAVING sum(km_ok) >= %(min_km)s
-             ORDER BY min(ts) DESC LIMIT %(limit)s""",
+        + """, t AS (
+                SELECT callsign, trip, min(ts) AS start,
+                       max(ts) FILTER (WHERE km_ok > 0) AS "end",
+                       round(sum(km_ok)::numeric, 2)::float AS km, count(*) AS points,
+                       max(speed_kmh) AS max_speed,
+                       EXTRACT(EPOCH FROM max(ts) FILTER (WHERE km_ok > 0) - min(ts))::int AS seconds,
+                       (array_agg(geom ORDER BY ts))[1] AS g0,
+                       (array_agg(area ORDER BY ts))[1] AS a0,
+                       (array_agg(geom ORDER BY ts DESC) FILTER (WHERE km_ok > 0))[1] AS g1,
+                       (array_agg(area ORDER BY ts DESC) FILTER (WHERE km_ok > 0))[1] AS a1
+                FROM seg GROUP BY callsign, trip
+                HAVING sum(km_ok) >= %(min_km)s
+                ORDER BY min(ts) DESC LIMIT %(limit)s
+             )
+             SELECT t.callsign, t.start, t."end", t.km, t.points, t.max_speed, t.seconds,
+                    ST_Y(t.g0) AS start_lat, ST_X(t.g0) AS start_lon,
+                    ST_Y(t.g1) AS end_lat, ST_X(t.g1) AS end_lon,
+                    sn.name AS start_name, sa.name AS start_gemeinde, sk.abbr AS start_kanton,
+                    en.name AS end_name, ea.name AS end_gemeinde, ek.abbr AS end_kanton
+             FROM t"""
+        + _ENDPOINT_SQL.format(g="g0", a="a0", p="s")
+        + _ENDPOINT_SQL.format(g="g1", a="a1", p="e")
+        + """ ORDER BY t.start DESC""",
         {**params, "min_km": min_km, "limit": limit},
     ).fetchall()
+    for r in rows:
+        r["from"] = place_label(r["start_name"], r["start_gemeinde"], r["start_kanton"])
+        r["to"] = place_label(r["end_name"], r["end_gemeinde"], r["end_kanton"])
+    return rows
 
 
 def places(c, f: Filter, eps_m: float = 150, min_points: int = 4, limit: int = 50) -> list[dict]:

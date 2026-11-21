@@ -1,6 +1,6 @@
 # aprs-stats
 
-Author: Adrian S / HB3XVA & Anthropic Claude - v0.4.0
+Author: Adrian S / HB3XVA & Anthropic Claude - v0.5.0
 
 [Changelog](CHANGELOG.md) · Lizenz MIT
 
@@ -27,7 +27,7 @@ Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (B
 | Import | CSV oder JSON von [aprs.fi/export](https://aprs.fi/export), mehrere Dateien auf einmal. Doppelte Positionen werden übersprungen, auch zwischen Import und Live-Daten. |
 | Karte | Spuren, Punkte, Heatmap, letzte Position, besuchte Gemeinden mit Kantonsgrenzen, benannte Orte. Karten: OpenStreetMap, swisstopo-Landeskarte, swisstopo-Luftbild. |
 | Statistik | Kilometer pro Tag/Woche/Monat/Jahr (gestapelt nach Gerät), Aktivität nach Wochentag und Uhrzeit, Geschwindigkeit und Höhe über die Zeit. |
-| Fahrten und Orte | Liste der Fahrten mit Distanz, Dauer und Tempo; Aufenthaltsorte mit Stunden und Anzahl Tage. Orte lassen sich benennen, von Hand oder mit einem Vorschlag von OpenStreetMap; ohne Namen steht die Gemeinde da. |
+| Fahrten und Orte | Liste der Fahrten mit Start- und Zielort, Distanz, Dauer und Tempo; Aufenthaltsorte mit Stunden und Anzahl Tage. Orte lassen sich benennen, von Hand oder mit einem Vorschlag von OpenStreetMap; ohne Namen steht die Gemeinde da. |
 | Gemeinden | Besuchte Gemeinden und Kantone aus den amtlichen Grenzen von swisstopo: Kacheln, Kartenebene, Tabellen mit Tagen, km, erstem und letztem Besuch. |
 | Pfade | Digipeater, iGates, Weg ins Netz (Internet, direkt zum iGate, über Digipeater), letzte Rohpakete. |
 | Datenqualität | Falsche GPS-Höhen nach dem Einschalten und Ausreisser werden automatisch verworfen. |
@@ -71,7 +71,7 @@ Erkannte Spalten (Gross-/Kleinschreibung und Einheiten in Klammern egal): `time`
 
 Gesendet wird nur mit verifiziertem Login und nur für das Rufzeichen des Logins, mit beliebiger SSID, und nur solange der Stack läuft. Das Paket geht nur ans Internet (APRS-IS), nicht über Funk.
 
-**Fahrten und Orte:** Ein Klick auf eine Fahrt zeigt genau diese Fahrt auf der Karte, ein Klick auf einen Ort zoomt dorthin.
+**Fahrten und Orte:** Jede Fahrt zeigt Start und Ziel, z. B. *Zuhause → Luzern (LU)*: den eigenen Ortsnamen, wenn dort einer vergeben ist, sonst die Gemeinde. Endet eine Fahrt in derselben Gemeinde oder am selben Ort, steht *Rundfahrt*. Das Suchfeld filtert nach Ort oder Gerät, z. B. alle Fahrten nach Luzern. Ein Klick auf eine Fahrt zeigt genau diese Fahrt auf der Karte, mit Start (grün) und Ziel (rot). Ein Klick auf einen Ort zoomt dorthin.
 
 **Orte benennen:** In der Orte-Tabelle auf ✎ klicken und einen Namen eingeben, z. B. *Zuhause*. *Vorschlag von OpenStreetMap* fragt [Nominatim](https://nominatim.openstreetmap.org/) nach dem Ort (Gebäude, Geschäft oder Adresse) und trägt den Vorschlag ins Feld ein; er lässt sich vor dem Speichern ändern. Nur dieser Knopf schickt Koordinaten nach aussen. Der Name gilt für alle Orte, deren Mittelpunkt innerhalb des gewählten Radius liegt, also auch in anderen Zeiträumen. Ein leeres Feld oder *Name entfernen* löscht ihn. Auf der Karte zeigt die Ebene *Ortsnamen* alle benannten Orte.
 
@@ -103,7 +103,7 @@ Verbindungen nach aussen: APRS-IS (Collector), die Kartenkacheln (Browser), einm
 ## Wie die Auswertungen rechnen
 
 - **Kilometer:** Summe der Distanzen zwischen aufeinanderfolgenden Positionen desselben Geräts. Nicht gezählt werden Abstände über 20 min (Pause), Sprünge schneller als 250 km/h (GPS-Fehler) und Bewegungen unter 50 m (Zittern im Stand). Sind zwei Geräte gleichzeitig unterwegs (z. B. Auto und Handfunkgerät), zählen beide.
-- **Fahrten:** Eine Pause von mehr als 20 min beendet eine Fahrt. Angezeigt werden Fahrten ab 1 km. Die Fahrt endet mit der letzten Bewegung.
+- **Fahrten:** Eine Pause von mehr als 20 min beendet eine Fahrt. Angezeigt werden Fahrten ab 1 km. Die Fahrt endet mit der letzten Bewegung. Start ist die erste Position der Fahrt (meist noch im Stand), Ziel die letzte Position mit Bewegung. Ein Ortsname gilt für Start oder Ziel, wenn der Punkt höchstens den Radius des Namens (mindestens 150 m) davon entfernt liegt. Liegt das Ziel weiter weg vom Parkplatz als dieser Radius, z. B. weil der Tracker beim Einparken nicht mehr gesendet hat, steht die Gemeinde da.
 - **Orte:** Standpunkte (unter 5 km/h) werden mit DBSCAN gruppiert (Radius wählbar, Standard 150 m, mindestens 4 Punkte). Die Aufenthaltsdauer zählt pro Position höchstens 30 min.
 - **Höhe:** Nach dem Einschalten melden viele Tracker zuerst eine zu tiefe Höhe (z. B. 102 m) und laufen dann über einige Minuten zur echten Höhe hoch. Unterwegs gibt es nach einem kurzen Neustart einzelne Ausreisser. Eine Höhe gilt als plausibel, wenn sie höchstens 30 m plus 12 % der horizontalen Distanz von der letzten plausiblen Höhe abweicht (Strassen sind selten steiler). Beginnt eine Fahrt dort, wo die letzte Fahrt endete, dient deren Höhe als Referenz. Sonst ist die Referenz der Punkt mit der Höhe am nächsten beim Median der Fahrt. Verworfene Höhen fehlen in Grafiken und Kacheln, die Rohwerte bleiben in `altitude_raw` erhalten und erscheinen im Kartenpopup und im CSV-Export. Details: [altitude.py](app/aprs_stats/altitude.py).
 - **Pfade:** APRS-IS dedupliziert. Pro Paket sieht man meist nur den ersten Weg ins Netz, nicht alle Digipeater und iGates, die es gehört haben. Der aprs.fi-Export enthält keine Pfade, Pfadauswertungen gibt es deshalb nur für Live-Daten.

@@ -269,3 +269,6 @@ tr.unvisited td { color: var(--muted); }
 .areas-source { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .areas-source:empty { display: none; }
 .areas-source .btn { padding: 4px 10px; font-size: 12.5px; }
+.trip-end { border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
+.trip-end.start { background: #16a34a; }
+.trip-end.end { background: #dc2626; }

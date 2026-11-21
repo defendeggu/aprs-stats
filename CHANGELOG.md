@@ -3,6 +3,15 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.5.0] – 2026-11-21
+
+### Neu
+- **Fahrten mit Start- und Zielort**, z. B. „Zuhause → Luzern (LU)“: eigener Ortsname, sonst die Gemeinde.
+  Gleicher Start und gleiches Ziel erscheinen als *Rundfahrt*.
+- Suchfeld über der Fahrten-Tabelle (Ort oder Gerät).
+- Ein Klick auf eine Fahrt markiert auf der Karte Start (grün) und Ziel (rot).
+- API: `/api/stats/trips` liefert zusätzlich `from`, `to`, Koordinaten, Ortsnamen und Gemeinden von Start und Ziel.
+
 ## [0.4.0] – 2026-11-20
 
 ### Neu

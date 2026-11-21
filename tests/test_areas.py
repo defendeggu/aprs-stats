@@ -47,3 +47,12 @@ def test_suggestion_only_locality():
 
 def test_suggestion_fallback_display_name():
     assert suggestion({"display_name": "Irgendwo, Schweiz", "address": {}}) == "Irgendwo"
+
+
+def test_place_label():
+    from aprs_stats.stats import place_label
+    assert place_label("Zuhause", "Hochdorf", "LU") == "Zuhause"
+    assert place_label(None, "Luzern", "LU") == "Luzern (LU)"
+    assert place_label(None, "Eschenbach (LU)", "LU") == "Eschenbach (LU)"
+    assert place_label(None, "Vaduz", None) == "Vaduz"
+    assert place_label(None, None, None) is None

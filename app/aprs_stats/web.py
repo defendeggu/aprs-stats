@@ -233,6 +233,7 @@ def stats_timeline(calls: CallsQ = None, start: StartQ = None, end: EndQ = None)
 
 @app.get("/api/stats/trips")
 def stats_trips(calls: CallsQ = None, start: StartQ = None, end: EndQ = None, min_km: float = 1.0):
+    boundaries.assign()
     with db.conn() as c:
         return stats.trips(c, make_filter(calls, start, end), min_km=min_km)
 

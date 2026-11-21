@@ -94,7 +94,11 @@
     <section class="tab" id="tab-trips">
       <div class="grid2">
         <div class="card">
-          <div class="card-head"><h2>Fahrten</h2><span class="muted small">ab 1 km; eine Pause von mehr als 20 min beendet eine Fahrt. Klick zeigt sie auf der Karte.</span></div>
+          <div class="card-head"><h2>Fahrten</h2>
+            <input id="trip-search" type="search" placeholder="Ort oder Gerät …" class="small-input">
+          </div>
+          <p class="muted small">Ab 1 km; eine Pause von mehr als 20 min beendet eine Fahrt. Start und Ziel: eigener Ortsname, sonst die Gemeinde.
+            Klick zeigt die Fahrt auf der Karte.</p>
           <div class="table-wrap"><table id="trips-table"></table></div>
         </div>
         <div class="card">

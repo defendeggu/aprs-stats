@@ -149,7 +149,7 @@ $("#devices").addEventListener("change", e => {
 });
 $("#select-all").onclick = () => { state.all = true; state.selected.clear(); selectionChanged(); };
 $("#select-none").onclick = () => { state.all = false; state.selected.clear(); selectionChanged(); };
-function selectionChanged() { saveSelection(); renderDevices(); state.fitNext = true; refresh(); }
+function selectionChanged() { saveSelection(); renderDevices(); layers.highlight.clearLayers(); state.fitNext = true; refresh(); }
 
 $("#ranges").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
@@ -159,12 +159,14 @@ function setRange(r) {
   state.range = r; save("range", r);
   $$("#ranges button").forEach(x => x.classList.toggle("active", x.dataset.range === r));
   if (r !== "custom") { $("#from").value = ""; $("#to").value = ""; }
+  layers.highlight.clearLayers();
   state.fitNext = true;
   refresh();
 }
 for (const id of ["#from", "#to"]) $(id).addEventListener("change", () => {
   state.range = "custom";
   $$("#ranges button").forEach(x => x.classList.remove("active"));
+  layers.highlight.clearLayers();
   state.fitNext = true;
   refresh();
 });
@@ -462,16 +464,12 @@ async function loadTrips() {
     api("stats/trips?" + query()),
     api("stats/places?" + query({ eps: $("#eps").value })),
   ]);
-  $("#trips-table").innerHTML = trips.length ? `<thead><tr><th>Gerät</th><th>Start</th><th class="num">km</th><th class="num">Dauer</th><th class="num">⌀ km/h</th><th class="num">max</th></tr></thead><tbody>` +
-    trips.map((t, i) => `<tr class="click" data-i="${i}">
-      <td><span class="dot" style="display:inline-block;background:${colorOf(t.callsign)}"></span> ${esc(t.callsign)}</td>
-      <td>${dt(t.start)}</td><td class="num">${fmtNum.format(t.km)}</td><td class="num">${dur(t.seconds)}</td>
-      <td class="num">${t.seconds ? fmtNum.format(t.km / (t.seconds / 3600)) : "–"}</td>
-      <td class="num">${t.max_speed != null ? fmtNum.format(t.max_speed) : "–"}</td></tr>`).join("") + "</tbody>"
-    : `<tbody><tr><td class="muted">Keine Fahrten im gewählten Zeitraum.</td></tr></tbody>`;
+  tripList = trips;
+  renderTrips();
   $("#trips-table").onclick = e => {
     const tr = e.target.closest("tr[data-i]"); if (!tr) return;
     const t = trips[tr.dataset.i];
+    showTripEnds(t);
     selectOnly([t.callsign]);
     state.range = "custom";
     $$("#ranges button").forEach(x => x.classList.remove("active"));
@@ -503,6 +501,39 @@ async function loadTrips() {
   };
 }
 $("#eps").addEventListener("change", loadTrips);
+
+/* ---------- Fahrten: Start und Ziel ---------- */
+let tripList = [];
+function endLabel(label, named) {
+  if (!label) return `<span class="muted">?</span>`;
+  return named ? `<span class="place-name">${esc(label)}</span>` : esc(label);
+}
+function routeHtml(t) {
+  if (t.from && t.from === t.to) return `${endLabel(t.from, t.start_name)} <span class="muted small">Rundfahrt</span>`;
+  return `${endLabel(t.from, t.start_name)} <span class="muted">→</span> ${endLabel(t.to, t.end_name)}`;
+}
+function renderTrips() {
+  const q = $("#trip-search").value.trim().toLowerCase();
+  const rows = tripList.map((t, i) => [t, i])
+    .filter(([t]) => !q || [t.from, t.to, t.callsign].some(x => (x || "").toLowerCase().includes(q)));
+  $("#trips-table").innerHTML = rows.length ? `<thead><tr><th>Gerät</th><th>Start</th><th>Strecke</th><th class="num">km</th><th class="num">Dauer</th><th class="num">⌀ km/h</th><th class="num">max</th></tr></thead><tbody>` +
+    rows.map(([t, i]) => `<tr class="click" data-i="${i}">
+      <td><span class="dot" style="display:inline-block;background:${colorOf(t.callsign)}"></span> ${esc(t.callsign)}</td>
+      <td>${dt(t.start)}</td><td>${routeHtml(t)}</td><td class="num">${fmtNum.format(t.km)}</td><td class="num">${dur(t.seconds)}</td>
+      <td class="num">${t.seconds ? fmtNum.format(t.km / (t.seconds / 3600)) : "–"}</td>
+      <td class="num">${t.max_speed != null ? fmtNum.format(t.max_speed) : "–"}</td></tr>`).join("") + "</tbody>"
+    : `<tbody><tr><td class="muted">${tripList.length ? "Keine Fahrt gefunden." : "Keine Fahrten im gewählten Zeitraum."}</td></tr></tbody>`;
+}
+$("#trip-search").addEventListener("input", renderTrips);
+/* Start und Ziel einer Fahrt auf der Karte markieren (DOM-Marker liegen über den Spuren) */
+function showTripEnds(t) {
+  layers.highlight.clearLayers();
+  const mark = (lat, lon, cls, text) => lat != null && L.marker([lat, lon], {
+    icon: L.divIcon({ className: "trip-end " + cls, iconSize: [14, 14], iconAnchor: [7, 7] }), interactive: false,
+  }).bindTooltip(text, { permanent: true, direction: "top", offset: [0, -8], className: "place-label" }).addTo(layers.highlight);
+  mark(t.start_lat, t.start_lon, "start", `Start: ${esc(t.from || "?")}`);
+  mark(t.end_lat, t.end_lon, "end", `Ziel: ${esc(t.to || "?")}`);
+}
 
 function placeNameHtml(p) {
   const area = p.gemeinde ? areaName(p.gemeinde, p.kanton) : "";
