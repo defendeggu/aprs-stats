@@ -9,14 +9,11 @@ import os
 import select
 import socket
 import time
-from datetime import datetime, timedelta, timezone
-
-import aprslib
+from datetime import datetime, timezone
 
 from . import __version__, db
-from .aprs import build_filter, full_call, matches, parse_path, position_packet, split_full
-from .altitude import clean_callsign
-from .store import ensure_station, insert_position
+from .aprs import build_filter, full_call, position_packet, split_full
+from .ingest import store_packet
 
 log = logging.getLogger("collector")
 
@@ -29,8 +26,6 @@ BEACON_CHECK = 5        # s zwischen Prüfungen auf fällige Baken
 BEACON_MIN_GAP = 60     # s Mindestabstand zwischen zwei Sendungen derselben Bake
 FILTER_CHECK = 15       # s zwischen Prüfungen auf geänderte Stationen
 STATUS_EVERY = 20       # s zwischen Status-Updates
-
-NO_POSITION_FORMATS = {"object", "item", "message", "status", "telemetry-message", "bulletin"}
 
 
 class Collector:
@@ -125,43 +120,10 @@ class Collector:
 
     def store(self, raw: str, stations: list[tuple[str, str]]) -> None:
         now = datetime.now(timezone.utc)
-        try:
-            pkt = aprslib.parse(raw)
-        except (aprslib.ParseError, aprslib.UnknownFormat) as e:
-            pkt = getattr(e, "packet", None) or {}
-            if not pkt.get("from"):
-                head = raw.split(":", 1)[0]
-                src, _, rest = head.partition(">")
-                parts = rest.split(",")
-                pkt = {"from": src, "to": parts[0] if parts else None, "path": parts[1:], "format": "unparsed"}
-        src = (pkt.get("from") or "").upper()
-        if not src or not matches(src, stations):
-            return  # z. B. HB3XVAB bei Filter b/HB3XVA*
-        p = parse_path(pkt.get("path") or [])
-
         with self.db.transaction():
-            cur = self.db.cursor()
-            cur.execute(
-                """INSERT INTO packets (received_at, source, callsign, tocall, raw, path, digis,
-                                        qconstruct, igate, format)
-                   VALUES (%s, 'aprs_is', %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                (now, src, pkt.get("to"), raw, pkt.get("path"), p["digis"], p["qconstruct"],
-                 p["igate"], pkt.get("format")),
-            )
-            packet_id = cur.fetchone()["id"]
-            ensure_station(cur, src)
-            lat, lon = pkt.get("latitude"), pkt.get("longitude")
-            if lat is not None and lon is not None and pkt.get("format") not in NO_POSITION_FORMATS:
-                symbol = (pkt.get("symbol_table") or "") + (pkt.get("symbol") or "") or None
-                try:
-                    if insert_position(
-                        cur, callsign=src, ts=now, lat=float(lat), lon=float(lon), source="aprs_is",
-                        speed=pkt.get("speed"), course=pkt.get("course"), alt=pkt.get("altitude"),
-                        comment=pkt.get("comment"), symbol=symbol, packet_id=packet_id,
-                    ) and pkt.get("altitude") is not None:
-                        clean_callsign(cur, src, since=now - timedelta(hours=3))
-                except ValueError:
-                    pass
+            result = store_packet(self.db.cursor(), raw, now, "aprs_is", stations)
+        if not result["stored"]:
+            return  # z. B. HB3XVAB bei Filter b/HB3XVA*
         self.packets_total += 1
         self.last_packet_at = now
         log.info("%s", raw)

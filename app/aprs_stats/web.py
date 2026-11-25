@@ -1,15 +1,16 @@
 """Weboberfläche und API."""
 import csv
+import hmac
 import io
 import math
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from importlib.resources import files
 from typing import Annotated
 
 import psycopg
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,7 @@ from . import AUTHOR, __version__, boundaries, db, geocode, stats
 from .altitude import clean_all, clean_callsign
 from .aprs import MAX_COMMENT_BYTES, full_call, normalize_callsign, normalize_ssid, position_packet, split_full
 from .importer import parse_file
+from .ingest import store_packet
 from .store import ensure_station, insert_position
 
 STATIC = files("aprs_stats").joinpath("static")
@@ -198,7 +200,7 @@ def packets(calls: CallsQ = None, start: StartQ = None, end: EndQ = None,
     where, params = f.where("received_at")
     with db.conn() as c:
         return c.execute(
-            f"""SELECT id, received_at, callsign, raw, digis, qconstruct, igate, format
+            f"""SELECT id, received_at, source, callsign, raw, digis, qconstruct, igate, format
                 FROM packets WHERE {where} ORDER BY received_at DESC LIMIT %(limit)s""",
             {**params, "limit": limit},
         ).fetchall()
@@ -603,6 +605,131 @@ def delete_beacon(bid: int):
     if not row:
         raise HTTPException(404, "Bake nicht gefunden")
     return {"deleted": _beacon_row(row)}
+
+
+# --- Anbindung (RadioMoni u. a.): Funk-Pakete anliefern, Daten inkrementell abholen ---------
+# Nur mit Token (Authorization: Bearer $APRS_STATS_API_TOKEN); ohne gesetzten Token ist das aus.
+
+API_TOKEN = os.environ.get("APRS_STATS_API_TOKEN", "").strip()
+TWIN_SECONDS = 90           # gleiches Paket über Funk und Internet: Fenster für die Zuordnung
+INTERNET_DELAY_S = 120      # Internet-Pakete erst nach dieser Zeit ausliefern (Funk-Gegenstück abwarten)
+
+
+def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
+    if not API_TOKEN:
+        raise HTTPException(503, "Anbindung nicht eingerichtet (APRS_STATS_API_TOKEN)")
+    given = (authorization or "").removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(given.encode(), API_TOKEN.encode()):
+        raise HTTPException(401, "Token fehlt oder falsch")
+
+
+TokenDep = Annotated[None, Depends(require_token)]
+
+
+class IngestIn(BaseModel):
+    raw: str = Field(..., min_length=5, max_length=1024, description="Paket im TNC2-Format: SRC>DST,PATH:info")
+    received_at: datetime | None = Field(None, description="Empfangszeit (UTC); leer = jetzt")
+    source: str = Field("rf", pattern="^rf$", description="Nur 'rf' (über Funk empfangen)")
+    ext_ref: str | None = Field(None, max_length=64, description="Kennung beim Lieferanten, z. B. RadioMoni-uuid")
+
+
+@app.post("/api/ingest")
+def ingest(p: IngestIn, _: TokenDep):
+    """Über Funk empfangenes Paket anliefern. Gespeichert wird es nur, wenn der Absender zu einer
+    eingetragenen Station gehört (wie beim Collector). Doppelte Positionen (gleiches Gerät, 90 s, 50 m,
+    andere Quelle) werden erkannt."""
+    raw = p.raw.strip().replace("\r", "").replace("\n", "")
+    if ">" not in raw.split(":", 1)[0] or ":" not in raw:
+        raise HTTPException(422, "Kein Paket im TNC2-Format (SRC>DST,PATH:info)")
+    when = p.received_at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    with db.conn() as c:
+        stations = [(r["callsign"], r["ssid"]) for r in c.execute("SELECT callsign, ssid FROM stations").fetchall()]
+        return store_packet(c.cursor(), raw, when, p.source, stations, ext_ref=p.ext_ref)
+
+
+def _area_ready(area: int | None, has_position: bool, boundaries_ready: bool) -> bool:
+    return not has_position or area is not None or not boundaries_ready
+
+
+def _boundaries_ready() -> bool:
+    boundaries.assign()
+    with db.conn() as c:
+        return bool(c.execute("SELECT EXISTS (SELECT 1 FROM areas) AS ok").fetchone()["ok"]) \
+            and not boundaries.is_running()
+
+
+_AREA_COLS = """a.name AS gemeinde, a.bfs_nr, a.kind AS area_kind, a.country, k.abbr AS kanton"""
+
+
+@app.get("/api/feed/packets")
+def feed_packets(_: TokenDep, after_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=5000)):
+    """Pakete mit id > after_id, aufsteigend, mit Position, Gemeinde und Kanton.
+
+    Gemeinde/Kanton kommen von der Position des Pakets oder, wenn diese als Duplikat verworfen wurde,
+    von der Position desselben Geräts aus der anderen Quelle (±90 s). `also_rf`: dasselbe Paket kam
+    auch über Funk. Geliefert wird nur bis vor das erste Paket, das noch nicht fertig ist
+    (Gemeinde noch offen, Internet-Paket jünger als 120 s); `next` ist der Cursor für den nächsten Aufruf."""
+    ready_areas = _boundaries_ready()
+    with db.conn() as c:
+        rows = c.execute(
+            f"""SELECT pk.id, pk.received_at, pk.source, pk.callsign, pk.tocall, pk.raw, pk.path, pk.digis,
+                       pk.qconstruct, pk.igate, pk.format, pk.ext_ref,
+                       pos.id AS position_id, twin.id AS twin_position_id,
+                       coalesce(pos.area, twin.area) AS area,
+                       EXISTS (SELECT 1 FROM packets r
+                               WHERE pk.source <> 'rf' AND r.source = 'rf' AND r.callsign = pk.callsign
+                                 AND r.received_at BETWEEN pk.received_at - make_interval(secs => %(tw)s)
+                                                       AND pk.received_at + make_interval(secs => %(tw)s)) AS also_rf,
+                       pk.received_at < now() - make_interval(secs => %(delay)s) AS settled,
+                       {_AREA_COLS}
+                FROM packets pk
+                LEFT JOIN LATERAL (SELECT id, area FROM positions WHERE packet_id = pk.id ORDER BY id LIMIT 1) pos ON true
+                LEFT JOIN LATERAL (
+                    SELECT id, area FROM positions t
+                    WHERE pos.id IS NULL AND t.callsign = pk.callsign AND t.source <> pk.source
+                      AND t.ts BETWEEN pk.received_at - make_interval(secs => %(tw)s)
+                                   AND pk.received_at + make_interval(secs => %(tw)s)
+                    ORDER BY abs(EXTRACT(EPOCH FROM t.ts - pk.received_at)) LIMIT 1) twin ON true
+                LEFT JOIN areas a ON a.id = coalesce(pos.area, twin.area)
+                LEFT JOIN kantone k ON k.nr = a.kanton_nr
+                WHERE pk.id > %(after)s ORDER BY pk.id LIMIT %(limit)s""",
+            {"after": after_id, "limit": limit, "tw": TWIN_SECONDS, "delay": INTERNET_DELAY_S},
+        ).fetchall()
+    items, pending = [], False
+    for r in rows:
+        has_pos = r["position_id"] is not None or r["twin_position_id"] is not None
+        if not _area_ready(r["area"], has_pos, ready_areas) or (r["source"] != "rf" and not r["settled"]):
+            pending = True
+            break
+        r = dict(r)
+        r.pop("settled")
+        items.append(r)
+    return {"items": items, "next": items[-1]["id"] if items else after_id, "pending": pending}
+
+
+@app.get("/api/feed/positions")
+def feed_positions(_: TokenDep, after_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=5000)):
+    """Positionen ohne Paket (Import von aprs.fi) mit id > after_id, mit Gemeinde und Kanton."""
+    ready_areas = _boundaries_ready()
+    with db.conn() as c:
+        rows = c.execute(
+            f"""SELECT p.id, p.callsign, p.ts, p.lat, p.lon, p.speed_kmh, p.course, p.altitude_m, p.altitude_raw,
+                       p.comment, p.symbol, p.source, p.ext_ref, p.area, {_AREA_COLS}
+                FROM positions p
+                LEFT JOIN areas a ON a.id = p.area
+                LEFT JOIN kantone k ON k.nr = a.kanton_nr
+                WHERE p.id > %(after)s AND p.packet_id IS NULL ORDER BY p.id LIMIT %(limit)s""",
+            {"after": after_id, "limit": limit},
+        ).fetchall()
+    items, pending = [], False
+    for r in rows:
+        if not _area_ready(r["area"], True, ready_areas):
+            pending = True
+            break
+        items.append(r)
+    return {"items": items, "next": items[-1]["id"] if items else after_id, "pending": pending}
 
 
 # --- Oberfläche -------------------------------------------------------------

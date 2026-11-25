@@ -158,3 +158,10 @@ CREATE TABLE IF NOT EXISTS place_names (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS place_names_geom ON place_names USING gist (geom);
+
+-- ab 0.6.0: Quelle 'rf' (über Funk empfangen und angeliefert, z. B. von RadioMoni).
+-- ext_ref: Kennung beim Lieferanten (RadioMoni: uuid des Dokuments), damit er die Daten zuordnen kann.
+-- Quellen: aprs_is (Internet), import (aprs.fi-Export), beacon (eigene Bake), rf (Funk)
+ALTER TABLE packets ADD COLUMN IF NOT EXISTS ext_ref text;
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS ext_ref text;
+CREATE INDEX IF NOT EXISTS packets_source ON packets (source);

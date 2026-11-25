@@ -3,6 +3,19 @@
 Alle wichtigen Änderungen an aprs-stats. Das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/):
 MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehlerbehebungen.
 
+## [0.6.0] – 2026-11-25
+
+### Neu
+- **Funk und Internet getrennt:** Positionen und Pakete können über Funk empfangen sein (Quelle `rf`, angeliefert z. B. von RadioMoni). Karte und Rohpakete zeigen den Empfangsweg: Funk, Internet (APRS-IS), Internet (Import aprs.fi), Internet (eigene Bake). Neue Kachel „Positionen Funk · Internet“.
+- **Anbindung mit Token** (`APRS_STATS_API_TOKEN`):
+  - `POST /api/ingest` nimmt ein Funk-Paket an, gespeichert wie beim Collector nur für eingetragene Stationen. Doppelte Positionen aus Funk und APRS-IS zählen einmal.
+  - `GET /api/feed/packets` und `/api/feed/positions` liefern alles inkrementell mit Gemeinde und Kanton.
+- API: `/api/stats/summary` liefert `by_source`, `/api/packets` die Quelle.
+
+### Geändert
+- Collector und Anlieferung speichern über dieselbe Funktion (`ingest.store_packet`).
+- Neue Spalte `ext_ref` (Kennung beim Lieferanten) in `packets` und `positions`; das Schema wird beim Start erweitert.
+
 ## [0.5.0] – 2026-11-21
 
 ### Neu

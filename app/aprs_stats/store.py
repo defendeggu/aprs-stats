@@ -12,10 +12,10 @@ DEDUP_METERS = 50
 
 _INSERT_POSITION = """
 INSERT INTO positions (packet_id, callsign, ts, lat, lon, geom, speed_kmh, course,
-                       altitude_m, altitude_raw, comment, symbol, source)
+                       altitude_m, altitude_raw, comment, symbol, source, ext_ref)
 SELECT %(packet_id)s, %(callsign)s, %(ts)s, %(lat)s, %(lon)s,
        ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326),
-       %(speed)s, %(course)s, %(alt)s, %(alt)s, %(comment)s, %(symbol)s, %(source)s
+       %(speed)s, %(course)s, %(alt)s, %(alt)s, %(comment)s, %(symbol)s, %(source)s, %(ext_ref)s
 WHERE NOT EXISTS (
     SELECT 1 FROM positions p
     WHERE p.callsign = %(callsign)s
@@ -43,6 +43,7 @@ def insert_position(
     comment: str | None = None,
     symbol: str | None = None,
     packet_id: int | None = None,
+    ext_ref: str | None = None,
 ) -> bool:
     """Gibt True zurück, wenn die Position neu gespeichert wurde."""
     if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
@@ -53,7 +54,7 @@ def insert_position(
             "packet_id": packet_id, "callsign": callsign, "ts": ts, "lat": lat, "lon": lon,
             "speed": speed, "course": course, "alt": alt,
             "comment": (comment or None) and comment[:500], "symbol": symbol,
-            "source": source, "dsec": DEDUP_SECONDS, "dm": DEDUP_METERS,
+            "source": source, "ext_ref": ext_ref, "dsec": DEDUP_SECONDS, "dm": DEDUP_METERS,
         },
     )
     return cur.rowcount == 1

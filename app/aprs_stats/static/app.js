@@ -193,6 +193,7 @@ async function loadSummary() {
     [fmtNum.format(s.km) + " km", "gefahren"],
     [fmtInt.format(s.points), "Positionen"],
     [fmtInt.format(s.packets), "Pakete (live)"],
+    ...(s.by_source && s.by_source.rf ? [[`${fmtInt.format(s.by_source.rf)} · ${fmtInt.format(s.points - s.by_source.rf)}`, "Positionen Funk · Internet"]] : []),
     [fmtInt.format(s.days), "Tage mit Daten"],
     [s.max_speed != null ? fmtNum.format(s.max_speed) + " km/h" : "–", "max. Geschwindigkeit"],
     [s.max_alt != null ? fmtInt.format(Math.round(s.max_alt)) + " m" : "–", "max. Höhe"],
@@ -257,8 +258,12 @@ function popupFor(r) {
     ${alt != null ? `Höhe: ${fmtInt.format(Math.round(alt))} m<br>`
       : altRaw != null ? `Höhe: – <span class="muted">(GPS meldete ${fmtInt.format(Math.round(altRaw))} m, verworfen)</span><br>` : ""}
     ${comment ? `<i>${esc(comment)}</i><br>` : ""}
-    <span class="muted">Quelle: ${src === "import" ? "Import" : "APRS-IS"}</span>`;
+    <span class="muted">Empfang: ${esc(sourceLabel(src))}</span>`;
 }
+
+// Empfangsweg einer Position bzw. eines Pakets: Funk (z. B. von RadioMoni angeliefert) oder Internet
+const SOURCE_LABELS = { rf: "Funk", aprs_is: "Internet (APRS-IS)", import: "Internet (Import aprs.fi)", beacon: "Internet (eigene Bake)" };
+function sourceLabel(src) { return SOURCE_LABELS[src] || src || "?"; }
 
 let kantoneGeo = null;
 async function loadMap() {
@@ -675,8 +680,8 @@ async function loadPaths() {
     options: { maintainAspectRatio: false, animation: false, plugins: { legend: { position: "bottom" } } },
   });
   $("#packets-table").innerHTML = pk.length
-    ? `<thead><tr><th>Zeit</th><th>Rufzeichen</th><th>iGate</th><th>Rohpaket</th></tr></thead><tbody>` +
-      pk.map(r => `<tr><td>${dt(r.received_at)}</td><td>${esc(r.callsign)}</td><td>${esc(r.igate || "")}</td><td class="wrap">${esc(r.raw)}</td></tr>`).join("") + "</tbody>"
+    ? `<thead><tr><th>Zeit</th><th>Rufzeichen</th><th>Empfang</th><th>iGate</th><th>Rohpaket</th></tr></thead><tbody>` +
+      pk.map(r => `<tr><td>${dt(r.received_at)}</td><td>${esc(r.callsign)}</td><td>${esc(sourceLabel(r.source))}</td><td>${esc(r.igate || "")}</td><td class="wrap">${esc(r.raw)}</td></tr>`).join("") + "</tbody>"
     : `<tbody><tr><td class="muted">Noch keine Live-Pakete im gewählten Zeitraum.</td></tr></tbody>`;
 }
 

@@ -1,6 +1,6 @@
 # aprs-stats
 
-Author: Adrian S / HB3XVA & Anthropic Claude - v0.5.0
+Author: Adrian S / HB3XVA & Anthropic Claude - v0.6.0
 
 [Changelog](CHANGELOG.md) · Lizenz MIT
 
@@ -33,6 +33,8 @@ Selbst gehostete Statistik für APRS-Positionsdaten, dazu eine feste Position (B
 | Datenqualität | Falsche GPS-Höhen nach dem Einschalten und Ausreisser werden automatisch verworfen. |
 | Export | CSV der aktuellen Auswahl. |
 | Bake | Eine feste Position (z. B. Heimstation) mit Symbol regelmässig an APRS-IS senden, damit sie auf aprs.fi sichtbar bleibt. |
+| Funk und Internet | Jede Position ist nach Empfangsweg gekennzeichnet: *Funk* (über einen eigenen Empfänger angeliefert, z. B. von [RadioMoni](https://github.com/defendeggu/Radio-Monitoring)), *Internet (APRS-IS)*, *Internet (Import aprs.fi)*, *Internet (eigene Bake)*. Kachel mit Funk- und Internet-Positionen. |
+| Anbindung | API mit Token: Funk-Pakete anliefern (`POST /api/ingest`) und alle Pakete und Positionen inkrementell abholen (`/api/feed/…`), z. B. für Kibana. |
 
 ## Schnellstart
 
@@ -95,6 +97,7 @@ Alle Einstellungen stehen in `.env` (Vorlage: [.env.example](.env.example)).
 | `BOUNDARIES_AUTOLOAD` | Gemeindegrenzen beim ersten Start automatisch laden; `0` = nur auf Knopfdruck | `1` |
 | `NOMINATIM_URL` | Nominatim-Server für Namensvorschläge | `https://nominatim.openstreetmap.org` |
 | `NOMINATIM_EMAIL` | optionale Kontaktadresse, die bei Nominatim-Anfragen mitgeht | – |
+| `APRS_STATS_API_TOKEN` | Token für Anlieferung und Feeds (mindestens 16 Zeichen); leer = Anbindung aus | – |
 
 Ohne Bake sendet aprs-stats nichts ins APRS-Netz; für das reine Mitlesen braucht es keinen gültigen Passcode.
 
@@ -136,7 +139,7 @@ APRS-IS (rotate.aprs2.net:14580)        aprs.fi-Export (CSV/JSON)
 | `web` | `aprs-stats-web` | Oberfläche (Leaflet, Leaflet.heat, Chart.js, lokal ausgeliefert) und API |
 | `collector` | `aprs-stats-collector` | APRS-IS-Verbindung, speichert Pakete und Positionen, sendet Baken |
 
-Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate; gesendete Baken mit Quelle `beacon`), `positions` (PostGIS-Punkte, bereinigte und rohe Höhe, Gebiet), `beacons`, `collector_status`, `imports`, `areas` und `kantone` (Grenzen von swisstopo), `boundaries_meta`, `place_names`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
+Tabellen: `stations`, `packets` (Rohpakete mit Pfad, Digipeatern, iGate; Quelle `aprs_is`, `rf` oder `beacon`), `positions` (Quelle `aprs_is`, `rf` oder `import`) (PostGIS-Punkte, bereinigte und rohe Höhe, Gebiet), `beacons`, `collector_status`, `imports`, `areas` und `kantone` (Grenzen von swisstopo), `boundaries_meta`, `place_names`. Das Schema wird beim Start angelegt und erweitert ([schema.sql](app/aprs_stats/schema.sql)).
 
 Code in [app/aprs_stats/](app/aprs_stats/):
 
@@ -150,8 +153,21 @@ Code in [app/aprs_stats/](app/aprs_stats/):
 | `geocode.py` | Namensvorschläge über Nominatim (höchstens 1 Anfrage pro Sekunde) |
 | `altitude.py` | Höhenfilter |
 | `aprs.py` | Rufzeichen, Filter, Pfadzerlegung, Positionspakete für Baken |
+| `ingest.py` | Ein Paket speichern (Collector und Anlieferung über Funk) |
 | `store.py` | Speichern mit Duplikaterkennung |
 | `static/` | Oberfläche (HTML, CSS, JavaScript, Bibliotheken) |
+
+## Anbindung an andere Programme
+
+Für Programme wie [RadioMoni](https://github.com/defendeggu/Radio-Monitoring), die APRS über Funk empfangen oder die Daten weiterverarbeiten (z. B. nach Elasticsearch/Kibana). Alle Aufrufe brauchen `Authorization: Bearer <APRS_STATS_API_TOKEN>`; ohne gesetzten Token antworten sie mit 503.
+
+| Aufruf | Zweck |
+|---|---|
+| `POST /api/ingest` | Ein über Funk empfangenes Paket anliefern: `{"raw": "SRC>DST,PATH:info", "received_at": "…", "ext_ref": "…"}`. Gespeichert wird es mit Quelle `rf`, wie beim Collector nur für eingetragene Stationen. Kommt dieselbe Position auch über APRS-IS (gleiches Gerät, 90 s, 50 m), zählt sie nur einmal. `ext_ref` ist die Kennung beim Lieferanten. |
+| `GET /api/feed/packets?after_id=N` | Pakete mit `id > N`, aufsteigend, mit Quelle, Pfad, iGate, Gemeinde und Kanton der Position. `also_rf`: Das Internet-Paket kam auch über Funk. Internet-Pakete erscheinen nach 120 s (damit das Funk-Gegenstück zugeordnet ist), Positionen erst mit Gemeinde. `next` ist der Cursor für den nächsten Aufruf. |
+| `GET /api/feed/positions?after_id=N` | Positionen ohne Paket (Import von aprs.fi), mit Gemeinde und Kanton. |
+
+Fahrten und Orte liefern die bestehenden `/api/stats/trips` und `/api/stats/places`.
 
 ## Betrieb
 
@@ -194,7 +210,18 @@ Tests laufen im Image:
 ```bash
 docker build -t aprs-stats:latest app
 docker run --rm -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
-  sh -c "pip install -q pytest && python -m pytest -q -p no:cacheprovider /tests"
+  sh -c "pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
+```
+
+Die Tests für Anlieferung und Feeds brauchen eine leere PostGIS-Datenbank und laufen nur mit `TEST_DATABASE_URL`:
+
+```bash
+docker network create aprs-test
+docker run -d --name aprs-test-db --network aprs-test -e POSTGRES_USER=aprs -e POSTGRES_PASSWORD=test postgis/postgis:16-3.5
+docker run --rm --network aprs-test -e TEST_DATABASE_URL=postgresql://aprs:test@aprs-test-db:5432/aprs \
+  -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
+  sh -c "pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
+docker rm -f aprs-test-db && docker network rm aprs-test
 ```
 
 API-Dokumentation (OpenAPI): <http://localhost:8092/docs>

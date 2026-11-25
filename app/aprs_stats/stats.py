@@ -74,7 +74,9 @@ def summary(c, f: Filter) -> dict:
     ).fetchone()["km"]
     pw, pp = f.where("received_at")
     packets = c.execute(f"SELECT count(*) AS n FROM packets WHERE {pw}", pp).fetchone()["n"]
-    return {**row, "km": float(km), "packets": packets}
+    by_source = {r["source"]: r["n"] for r in c.execute(
+        f"SELECT source, count(*) AS n FROM positions WHERE {where} GROUP BY source", params).fetchall()}
+    return {**row, "km": float(km), "packets": packets, "by_source": by_source}
 
 
 def distance(c, f: Filter, bucket: str) -> list[dict]:
