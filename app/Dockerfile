@@ -6,7 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Debian security updates; pip is not needed at run time (its vendored libraries are flagged by
+# scanners): removed after the install. Tests bring it back with `python -m ensurepip`.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+ && pip install -r requirements.txt \
+ && pip uninstall -y pip
 
 COPY aprs_stats ./aprs_stats
 

@@ -14,6 +14,7 @@ MAJOR für inkompatible Änderungen, MINOR für neue Funktionen, PATCH für Fehl
 
 ### Geändert
 - Collector und Anlieferung speichern über dieselbe Funktion (`ingest.store_packet`).
+- Image: Debian-Sicherheitsupdates beim Build; pip wird nach der Installation entfernt (seine mitgelieferten Bibliotheken hatten bekannte Lücken). Die Tests holen es mit `python -m ensurepip` zurück.
 - Neue Spalte `ext_ref` (Kennung beim Lieferanten) in `packets` und `positions`; das Schema wird beim Start erweitert.
 
 ## [0.5.0] – 2026-11-21

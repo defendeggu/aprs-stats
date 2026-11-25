@@ -210,7 +210,7 @@ Tests laufen im Image:
 ```bash
 docker build -t aprs-stats:latest app
 docker run --rm -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
-  sh -c "pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
+  sh -c "python -m ensurepip >/dev/null && python -m pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
 ```
 
 Die Tests für Anlieferung und Feeds brauchen eine leere PostGIS-Datenbank und laufen nur mit `TEST_DATABASE_URL`:
@@ -220,7 +220,7 @@ docker network create aprs-test
 docker run -d --name aprs-test-db --network aprs-test -e POSTGRES_USER=aprs -e POSTGRES_PASSWORD=test postgis/postgis:16-3.5
 docker run --rm --network aprs-test -e TEST_DATABASE_URL=postgresql://aprs:test@aprs-test-db:5432/aprs \
   -v "$PWD/tests:/tests:ro" -u root aprs-stats:latest \
-  sh -c "pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
+  sh -c "python -m ensurepip >/dev/null && python -m pip install -q pytest httpx && python -m pytest -q -p no:cacheprovider /tests"
 docker rm -f aprs-test-db && docker network rm aprs-test
 ```
 
